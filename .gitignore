@@ -7,7 +7,7 @@ log/
 husky_catkin_ws/
 install.jazzy.bak/
 log.jazzy.bak/
-
+sceneseg_test/
 
 # Husky robot assets
 Husky/
