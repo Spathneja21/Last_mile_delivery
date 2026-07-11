@@ -1,0 +1,45 @@
+<launch>
+  <!--
+    webcam_navigate.launch  —  ROS 1 (Noetic)
+    Starts usb_cam (camera) + webcam_navigator_node (SceneSeg + Scene3D → Twist).
+
+    Required args:
+      checkpoint_path       — absolute path to SceneSeg .pth
+      depth_checkpoint_path — absolute path to Scene3D  .pth
+
+    Optional args:
+      video_device   (default /dev/video0)
+      image_topic    (default /webcam/image_raw)
+      cmd_vel_topic  (default /cmd_vel)
+      overlay_topic  (default /vision_pilot/webcam_navigator/overlay)
+  -->
+
+  <arg name="checkpoint_path" />
+  <arg name="depth_checkpoint_path" />
+  <arg name="video_device"   default="/dev/video0" />
+  <arg name="image_topic"    default="/webcam/image_raw" />
+  <arg name="cmd_vel_topic"  default="/cmd_vel" />
+  <arg name="overlay_topic"  default="/vision_pilot/webcam_navigator/overlay" />
+
+  <!-- USB camera — usb_cam (apt: ros-noetic-usb-cam) -->
+  <node name="webcam" pkg="usb_cam" type="usb_cam_node" output="screen">
+    <param name="video_device"      value="$(arg video_device)" />
+    <param name="image_width"       value="320" />
+    <param name="image_height"      value="240" />
+    <param name="pixel_format"      value="yuyv" />
+    <param name="camera_frame_id"   value="webcam" />
+    <remap from="/usb_cam/image_raw" to="$(arg image_topic)" />
+  </node>
+
+  <!-- Webcam navigator: SceneSeg + Scene3D → Twist -->
+  <node name="webcam_navigator_node"
+        pkg="vp_car_sim"
+        type="webcam_navigator_node.py"
+        output="screen">
+    <param name="checkpoint_path"       value="$(arg checkpoint_path)" />
+    <param name="depth_checkpoint_path" value="$(arg depth_checkpoint_path)" />
+    <param name="image_topic"           value="$(arg image_topic)" />
+    <param name="cmd_vel_topic"         value="$(arg cmd_vel_topic)" />
+    <param name="overlay_topic"         value="$(arg overlay_topic)" />
+  </node>
+</launch>

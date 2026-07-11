@@ -1,0 +1,187 @@
+<?xml version="1.0"?>
+<robot name="vp_car" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ============================================================ -->
+  <!-- Basic dimensions                                              -->
+  <!-- ============================================================ -->
+  <xacro:property name="chassis_length" value="0.6"/>
+  <xacro:property name="chassis_width"  value="0.4"/>
+  <xacro:property name="chassis_height" value="0.2"/>
+  <xacro:property name="chassis_mass"   value="20.0"/>
+
+  <xacro:property name="wheel_radius" value="0.1"/>
+  <xacro:property name="wheel_width"  value="0.05"/>
+  <xacro:property name="wheel_mass"   value="1.0"/>
+  <xacro:property name="wheel_separation" value="0.45"/>
+  <xacro:property name="wheel_x_offset" value="0.2"/>
+
+  <!-- VisionPilot front camera spec (Media/VisionPilot.png):
+       1x front-facing RGB camera, 50 deg horizontal FOV, min 1MP resolution -->
+  <xacro:property name="cam_hfov_deg" value="50.0"/>
+  <xacro:property name="cam_width"  value="1280"/>
+  <xacro:property name="cam_height" value="800"/> <!-- 1280x800 = 1.024 MP -->
+
+  <material name="chassis_grey">
+    <color rgba="0.3 0.3 0.3 1.0"/>
+  </material>
+  <material name="wheel_black">
+    <color rgba="0.05 0.05 0.05 1.0"/>
+  </material>
+  <material name="camera_blue">
+    <color rgba="0.1 0.2 0.8 1.0"/>
+  </material>
+
+  <!-- ============================================================ -->
+  <!-- Base / chassis                                                -->
+  <!-- ============================================================ -->
+  <link name="base_link"/>
+
+  <link name="chassis">
+    <visual>
+      <geometry>
+        <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
+      </geometry>
+      <material name="chassis_grey"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="${chassis_mass}"/>
+      <inertia ixx="0.4" ixy="0" ixz="0" iyy="0.6" iyz="0" izz="0.6"/>
+    </inertial>
+  </link>
+
+  <joint name="base_to_chassis" type="fixed">
+    <parent link="base_link"/>
+    <child link="chassis"/>
+    <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!-- Wheels (differential drive: rear-left / rear-right)           -->
+  <!-- Front-left / front-right are passive caster-style wheels      -->
+  <!-- ============================================================ -->
+  <xacro:macro name="wheel" params="prefix x_off y_off">
+    <link name="${prefix}_wheel">
+      <visual>
+        <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+        <material name="wheel_black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="${wheel_mass}"/>
+        <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+      </inertial>
+    </link>
+
+    <joint name="${prefix}_wheel_joint" type="continuous">
+      <parent link="chassis"/>
+      <child link="${prefix}_wheel"/>
+      <origin xyz="${x_off} ${y_off} -${wheel_radius}" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:wheel prefix="rear_left"   x_off="-${wheel_x_offset}" y_off="${wheel_separation/2}"/>
+  <xacro:wheel prefix="rear_right"  x_off="-${wheel_x_offset}" y_off="-${wheel_separation/2}"/>
+  <xacro:wheel prefix="front_left"  x_off="${wheel_x_offset}"  y_off="${wheel_separation/2}"/>
+  <xacro:wheel prefix="front_right" x_off="${wheel_x_offset}"  y_off="-${wheel_separation/2}"/>
+
+  <!-- ============================================================ -->
+  <!-- Front-facing RGB camera                                       -->
+  <!-- ============================================================ -->
+  <link name="front_camera_link">
+    <visual>
+      <geometry>
+        <box size="0.03 0.06 0.03"/>
+      </geometry>
+      <material name="camera_blue"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.03 0.06 0.03"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+    </inertial>
+  </link>
+
+  <joint name="front_camera_joint" type="fixed">
+    <parent link="chassis"/>
+    <child link="front_camera_link"/>
+    <!-- Mounted on the front face of the chassis, looking forward -->
+    <origin xyz="${chassis_length/2} 0 ${chassis_height/2 - 0.02}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="front_camera_optical_link"/>
+
+  <joint name="front_camera_optical_joint" type="fixed">
+    <parent link="front_camera_link"/>
+    <child link="front_camera_optical_link"/>
+    <!-- REP-103 optical frame: +Z forward, +X right, +Y down,
+         relative to the body camera frame (+X forward, +Y left, +Z up). -->
+    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!-- Gazebo (gz-sim) plugins                                       -->
+  <!-- ============================================================ -->
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>rear_left_wheel_joint</left_joint>
+      <right_joint>rear_right_wheel_joint</right_joint>
+      <wheel_separation>${wheel_separation}</wheel_separation>
+      <wheel_radius>${wheel_radius}</wheel_radius>
+      <odom_publish_frequency>30</odom_publish_frequency>
+      <topic>cmd_vel</topic>
+      <odom_topic>odom</odom_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_link</child_frame_id>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+      <topic>joint_states</topic>
+    </plugin>
+  </gazebo>
+
+  <!-- Sensor attached to the body camera link so it looks forward (+X).
+       Messages are tagged with the optical frame so the camera data lands in
+       the robot's camera module frame (front_camera_optical_link). -->
+  <gazebo reference="front_camera_link">
+    <sensor name="front_camera" type="camera">
+      <camera>
+        <!-- 50 deg HFoV, min 1MP resolution per VisionPilot.png sensing spec -->
+        <horizontal_fov>${cam_hfov_deg * pi / 180.0}</horizontal_fov>
+        <image>
+          <width>${cam_width}</width>
+          <height>${cam_height}</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.05</near>
+          <far>300</far>
+        </clip>
+        <optical_frame_id>front_camera_optical_link</optical_frame_id>
+        <camera_info_topic>vp_car/front_camera/camera_info</camera_info_topic>
+      </camera>
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <visualize>true</visualize>
+      <topic>vp_car/front_camera/image_raw</topic>
+    </sensor>
+  </gazebo>
+
+</robot>

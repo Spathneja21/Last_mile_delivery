@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Robot Live Tracking</title>
+    <style>
+        #map { height: 100vh; width: 100%; }
+        body { margin: 0; padding: 0; }
+        #controls {
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            z-index: 1; background: white; padding: 8px 12px; border-radius: 6px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-family: sans-serif;
+        }
+        #controls button { margin: 0 4px; padding: 6px 14px; font-size: 14px; cursor: pointer; }
+        #controls span { margin-left: 8px; color: #333; }
+    </style>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCGQIyvx-PWsECJ2MxKIJoMxB3lfkBOVLM&callback=initMap" async defer></script>
+    <script>
+        const API_BASE = 'http://localhost:5000';
+
+        let map;
+        let robotMarker;
+        let destinationMarker;    // the single selected destination
+        let pathLine;             // red road-snapped path robot -> destination
+        let trailLine;            // blue actual-traveled trail, for comparison against pathLine
+
+        function initMap() {
+            // Default starting position — user-provided reference point
+            // (31°46'52.7"N 76°59'51.4"E), matches husky.urdf.xacro /
+            // gps_navigator_node.py / waypoint_path_node.py / map_app.py.
+            const initialPos = { lat: 31.781306, lng: 76.997611 };
+
+            map = new google.maps.Map(document.getElementById("map"), {
+                zoom: 18,
+                center: initialPos,
+                mapTypeId: 'roadmap'
+            });
+
+            // Create the robot marker
+            robotMarker = new google.maps.Marker({
+                position: initialPos,
+                map: map,
+                title: "My Robot",
+                icon: {
+                    url: "https://maps.google.com/mapfiles/kml/pal4/icon62.png", // Custom icon
+                    scaledSize: new google.maps.Size(40, 40)
+                }
+            });
+
+            // The computed route from the robot to the destination, drawn in
+            // red on top of the gray road network.
+            pathLine = new google.maps.Polyline({
+                map: map,
+                path: [],
+                strokeColor: '#e00000',
+                strokeOpacity: 0.95,
+                strokeWeight: 5,
+                zIndex: 3
+            });
+
+            destinationMarker = new google.maps.Marker({
+                map: map,
+                title: "Destination",
+                visible: false,
+                icon: {
+                    url: "https://maps.google.com/mapfiles/kml/paddle/red-circle.png",
+                    scaledSize: new google.maps.Size(32, 32)
+                }
+            });
+
+            // The ACTUAL path the robot has physically traveled (from GPS),
+            // in blue — draw this over the red PLANNED path to see at a
+            // glance whether the robot is following it or diverging.
+            trailLine = new google.maps.Polyline({
+                map: map,
+                path: [],
+                strokeColor: '#1565c0',
+                strokeOpacity: 0.9,
+                strokeWeight: 4,
+                zIndex: 4
+            });
+
+            // Click anywhere on the map to set a single destination — this
+            // immediately computes the road path from the robot's current
+            // position to that point and highlights it in red.
+            map.addListener("click", (e) => setDestination(e.latLng.lat(), e.latLng.lng()));
+
+            // Draw every routable road-graph node as a small dot, and every
+            // edge as a thin connecting line, so it's visible which areas
+            // are actually connected by mapped roads (this extract has a
+            // few disconnected clusters — this makes that obvious at a
+            // glance instead of surprising you later).
+            loadRoadEdges();
+            loadRoadNodes();
+
+            // Start listening for position updates
+            startTracking();
+            startTrailTracking();
+        }
+
+        async function loadRoadNodes() {
+            try {
+                const response = await fetch(`${API_BASE}/api/road-nodes`);
+                const nodes = await response.json();
+                nodes.forEach(n => {
+                    new google.maps.Marker({
+                        position: { lat: n.latitude, lng: n.longitude },
+                        map: map,
+                        icon: {
+                            path: google.maps.SymbolPath.CIRCLE,
+                            scale: 3,
+                            fillColor: '#666666',
+                            fillOpacity: 0.7,
+                            strokeWeight: 0
+                        },
+                        clickable: false,
+                        zIndex: 2
+                    });
+                });
+                console.log(`Loaded ${nodes.length} road-network nodes.`);
+            } catch (error) {
+                console.error("Error loading road nodes:", error);
+            }
+        }
+
+        async function loadRoadEdges() {
+            try {
+                const response = await fetch(`${API_BASE}/api/road-edges`);
+                const edges = await response.json();
+                edges.forEach(e => {
+                    new google.maps.Polyline({
+                        map: map,
+                        path: [
+                            { lat: e.from.latitude, lng: e.from.longitude },
+                            { lat: e.to.latitude, lng: e.to.longitude }
+                        ],
+                        strokeColor: '#999999',
+                        strokeOpacity: 0.6,
+                        strokeWeight: 2,
+                        clickable: false,
+                        zIndex: 1
+                    });
+                });
+                console.log(`Loaded ${edges.length} road-network edges.`);
+            } catch (error) {
+                console.error("Error loading road edges:", error);
+            }
+        }
+
+        async function setDestination(lat, lng) {
+            destinationMarker.setPosition({ lat, lng });
+            destinationMarker.setVisible(true);
+            document.getElementById('approveBtn').disabled = true;
+            document.getElementById('status').textContent = 'Computing path...';
+            try {
+                const response = await fetch(`${API_BASE}/api/set-path`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ latitude: lat, longitude: lng })
+                });
+                // Server routes from the robot's current position to this point
+                // and returns the road-snapped path — draw it in red. This is a
+                // PREVIEW only, the robot does not move until "Approve" is clicked.
+                const path = await response.json();
+                pathLine.setPath(path.map(w => ({ lat: w.latitude, lng: w.longitude })));
+                document.getElementById('approveBtn').disabled = false;
+                document.getElementById('status').textContent =
+                    `Path computed (${path.length} road point${path.length > 1 ? 's' : ''}) — click Approve to start`;
+            } catch (error) {
+                console.error("Error computing path:", error);
+                document.getElementById('status').textContent = 'Error computing path (see console)';
+            }
+        }
+
+        async function approvePath() {
+            document.getElementById('approveBtn').disabled = true;
+            try {
+                const response = await fetch(`${API_BASE}/api/approve-path`, { method: 'POST' });
+                const result = await response.json();
+                document.getElementById('status').textContent =
+                    `Approved — robot following ${result.waypoints} point path`;
+            } catch (error) {
+                console.error("Error approving path:", error);
+                document.getElementById('status').textContent = 'Error approving path (see console)';
+            }
+        }
+
+        async function clearPath() {
+            destinationMarker.setVisible(false);
+            pathLine.setPath([]);
+            trailLine.setPath([]);
+            document.getElementById('approveBtn').disabled = true;
+            document.getElementById('status').textContent = 'Click the map to set a destination';
+            try {
+                await fetch(`${API_BASE}/api/clear-trail`, { method: 'POST' });
+            } catch (error) {
+                console.error("Error clearing trail:", error);
+            }
+        }
+
+        // Polls the robot's actual traveled GPS trail (recorded server-side
+        // at ~1 Hz) and draws it in blue — compare against the red planned
+        // path to see whether the robot is actually following it.
+        async function startTrailTracking() {
+            setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/api/robot-trail`);
+                    const trail = await response.json();
+                    trailLine.setPath(trail.map(w => ({ lat: w.latitude, lng: w.longitude })));
+                } catch (error) {
+                    console.error("Error fetching robot trail:", error);
+                }
+            }, 1000);
+        }
+
+        // Long-polling or WebSocket function to get data from your backend
+        async function startTracking() {
+            setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/api/robot-pose`);
+                    const data = await response.json();
+
+                    const newPos = { lat: data.latitude, lng: data.longitude };
+
+                    // Update marker position and center map
+                    robotMarker.setPosition(newPos);
+                    map.setCenter(newPos);
+                } catch (error) {
+                    console.error("Error fetching robot position:", error);
+                }
+            }, 200); // Updates 5 times per second
+        }
+    </script>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="controls">
+        <button id="approveBtn" onclick="approvePath()" disabled>Approve</button>
+        <button onclick="clearPath()">Clear</button>
+        <span id="status">Click the map to set a destination</span>
+    </div>
+</body>
+</html>

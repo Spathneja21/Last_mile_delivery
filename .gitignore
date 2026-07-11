@@ -1,0 +1,26 @@
+# Build artifacts (matches at any depth, e.g. also husky_catkin_ws/build)
+build/
+build.jazzy.bak/
+docker/
+install/
+log/
+husky_catkin_ws/
+install.jazzy.bak/
+log.jazzy.bak/
+
+
+# Husky robot assets
+Husky/
+
+# Python venvs / caches
+venv/
+__pycache__/
+*.pyc
+
+# Model weights (too large for git, exceed GitHub's 100MB file limit)
+models/
+
+# Markdown docs
+*.md
+!README.md
+*.txt
