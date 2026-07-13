@@ -24,3 +24,6 @@ models/
 *.md
 !README.md
 *.txt
+
+run_nl_command.sh
+run_send_nl_command.sh
