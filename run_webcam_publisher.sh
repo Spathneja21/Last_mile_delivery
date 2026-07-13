@@ -2,9 +2,9 @@
 # run_webcam_publisher.sh
 # Reads from /dev/video0 and publishes to /webcam/image_raw
 
-LEROBOT_SITE="/data/archit0030/miniforge3/envs/lerobot/lib/python3.10/site-packages"
-export PYTHONPATH="$LEROBOT_SITE:/opt/ros/noetic/lib/python3/dist-packages:/usr/lib/python3/dist-packages:$PYTHONPATH"
-/data/archit0030/miniforge3/envs/lerobot/bin/python3 -c "
+VP_GPU_SITE="/data/archit0030/miniforge3/envs/vp_gpu/lib/python3.8/site-packages"
+export PYTHONPATH="$VP_GPU_SITE:/opt/ros/noetic/lib/python3/dist-packages:/usr/lib/python3/dist-packages:$PYTHONPATH"
+/data/archit0030/miniforge3/envs/vp_gpu/bin/python3 -c "
 import cv2
 import rospy
 from sensor_msgs.msg import Image
