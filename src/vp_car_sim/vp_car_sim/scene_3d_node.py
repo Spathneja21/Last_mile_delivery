@@ -9,7 +9,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 
-from vp_car_sim.vp_models.inference.scene_3d_infer import Scene3DNetworkInfer
+from vp_car_sim.vp_models.pth_pipeline.inference.scene_3d_infer import Scene3DNetworkInfer
 
 # Model input size required by Scene3D
 MODEL_WIDTH = 640

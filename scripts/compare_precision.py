@@ -23,8 +23,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WS = os.path.abspath(os.path.join(HERE, '..'))
 sys.path.insert(0, os.path.join(WS, 'src', 'vp_car_sim'))
 
-from vp_car_sim.vp_models.inference.scene_seg_infer import SceneSegNetworkInfer
-from vp_car_sim.vp_models.inference.scene_3d_infer import Scene3DNetworkInfer
+from vp_car_sim.vp_models.pth_pipeline.inference.scene_seg_infer import SceneSegNetworkInfer
+from vp_car_sim.vp_models.pth_pipeline.inference.scene_3d_infer import Scene3DNetworkInfer
 
 MODEL_W, MODEL_H = 640, 320
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)

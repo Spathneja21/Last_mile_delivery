@@ -28,10 +28,7 @@ setup(
         'console_scripts': [
             'scene_seg_node = vp_car_sim.scene_seg_node:main',
             'scene_3d_node = vp_car_sim.scene_3d_node:main',
-            'awsim_navigator_node = vp_car_sim.awsim_navigator_node:main',
             'scene_seg_navigator = vp_car_sim.scene_seg_navigator_node:main',
-            'auto_drive_node = vp_car_sim.auto_drive_node:main',
-            'auto_steer_node = vp_car_sim.auto_steer_node:main',
             'webcam_navigator_node = vp_car_sim.webcam_navigator_node:main',
         ],
     },

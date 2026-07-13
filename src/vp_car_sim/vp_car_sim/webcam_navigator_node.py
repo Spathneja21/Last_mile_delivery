@@ -23,10 +23,10 @@ from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
 
-from vp_car_sim.vp_models.decision.scene_decision import compute_command, overlay_image
-from vp_car_sim.vp_models.decision.csv_logger import CommandLogger
-from vp_car_sim.vp_models.inference.scene_seg_infer_trt import SceneSegNetworkInferTRT
-from vp_car_sim.vp_models.inference.scene_3d_infer_trt import Scene3DNetworkInferTRT
+from vp_car_sim.vp_models.trt_pipeline.decision.scene_decision import compute_command, overlay_image
+from vp_car_sim.vp_models.trt_pipeline.decision.csv_logger import CommandLogger
+from vp_car_sim.vp_models.trt_pipeline.inference.scene_seg_infer_trt import SceneSegNetworkInferTRT
+from vp_car_sim.vp_models.trt_pipeline.inference.scene_3d_infer_trt import Scene3DNetworkInferTRT
 
 MODEL_WIDTH = 640
 MODEL_HEIGHT = 320

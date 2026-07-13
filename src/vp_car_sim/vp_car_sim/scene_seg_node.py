@@ -8,7 +8,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 
-from vp_car_sim.vp_models.inference.scene_seg_infer import SceneSegNetworkInfer
+from vp_car_sim.vp_models.pth_pipeline.inference.scene_seg_infer import SceneSegNetworkInfer
 
 # Model input size required by SceneSeg
 MODEL_WIDTH = 640

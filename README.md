@@ -127,10 +127,10 @@ run_webcam_publisher.sh  ── publishes ──►  /webcam/image_raw (sensor_m
 | Publisher launcher | [run_webcam_publisher.sh](run_webcam_publisher.sh) | Starts `webcam_publisher` node — reads `/dev/video0`, publishes `/webcam/image_raw`. |
 | Navigator launcher | [run_webcam_navigator.sh](run_webcam_navigator.sh) | Sets up ROS + Python env, launches `webcam_navigator_node.py` with model/topic params. |
 | Navigator node | [src/vp_car_sim/vp_car_sim/webcam_navigator_node.py](src/vp_car_sim/vp_car_sim/webcam_navigator_node.py) | Main ROS node: subscribes to camera, runs inference, publishes `/cmd_vel`. |
-| SceneSeg TensorRT wrapper | [src/vp_car_sim/vp_car_sim/vp_models/inference/scene_seg_infer_trt.py](src/vp_car_sim/vp_car_sim/vp_models/inference/scene_seg_infer_trt.py) | Loads/runs the SceneSeg `.engine`, returns per-pixel class map. |
-| Scene3D TensorRT wrapper | [src/vp_car_sim/vp_car_sim/vp_models/inference/scene_3d_infer_trt.py](src/vp_car_sim/vp_car_sim/vp_models/inference/scene_3d_infer_trt.py) | Loads/runs the Scene3D `.engine`, returns relative depth map. |
-| Decision logic | [src/vp_car_sim/vp_car_sim/vp_models/decision/scene_decision.py](src/vp_car_sim/vp_car_sim/vp_models/decision/scene_decision.py) | Pure function: seg + depth → `(linear, angular, info)`; also builds the debug overlay image. |
-| Command CSV logger | [src/vp_car_sim/vp_car_sim/vp_models/decision/csv_logger.py](src/vp_car_sim/vp_car_sim/vp_models/decision/csv_logger.py) | Appends per-frame bin/velocity/brake-state rows to `logs/pipeline_log.csv`. |
+| SceneSeg TensorRT wrapper | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_seg_infer_trt.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_seg_infer_trt.py) | Loads/runs the SceneSeg `.engine`, returns per-pixel class map. |
+| Scene3D TensorRT wrapper | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_3d_infer_trt.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_3d_infer_trt.py) | Loads/runs the Scene3D `.engine`, returns relative depth map. |
+| Decision logic | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/scene_decision.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/scene_decision.py) | Pure function: seg + depth → `(linear, angular, info)`; also builds the debug overlay image. |
+| Command CSV logger | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/csv_logger.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/csv_logger.py) | Appends per-frame bin/velocity/brake-state rows to `logs/pipeline_log.csv`. |
 | Precision comparison tool | [scripts/compare_precision.py](scripts/compare_precision.py) | Sanity-checks the FP16 `.engine`s against the FP32 `.pth` models — **requires `.pth` checkpoints this repo doesn't ship** (see §8.3); not runnable out of the box. |
 | Timing plot generator | [scripts/plot_timings.py](scripts/plot_timings.py) | Reads `logs/timing_log.csv`, plots per-stage latency. |
 | Command plot generator | [scripts/plot_pipeline_log.py](scripts/plot_pipeline_log.py) | Reads `logs/pipeline_log.csv`, plots velocity/brake/bin distributions. |
@@ -416,7 +416,7 @@ Returns `(linear, angular, info)` — `info` carries all per-bin arrays plus `bl
 
 | File | Written by | Columns / content |
 |---|---|---|
-| `logs/pipeline_log.csv` | `CommandLogger` ([csv_logger.py](src/vp_car_sim/vp_car_sim/vp_models/decision/csv_logger.py)) | `bin_number, linear_velocity, angular_velocity, command` (`command` = `BRAKE`/`CLEAR`) — one row per frame. |
+| `logs/pipeline_log.csv` | `CommandLogger` ([csv_logger.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/csv_logger.py)) | `bin_number, linear_velocity, angular_velocity, command` (`command` = `BRAKE`/`CLEAR`) — one row per frame. |
 | `logs/timing_log.csv` | `webcam_navigator_node.py` directly | `frame, pre_ms, seg_ms, depth_ms, post_ms, pub_ms, total_ms, e2e_ms` — one row per frame. |
 | `logs/pipeline_log_plots.png` | manually run [scripts/plot_pipeline_log.py](scripts/plot_pipeline_log.py) (not auto-invoked) | Velocity/brake/bin-distribution plots from `pipeline_log.csv`. |
 | (timing plot) | manually run [scripts/plot_timings.py](scripts/plot_timings.py) (not auto-invoked) | Per-stage latency plots from `timing_log.csv`. |

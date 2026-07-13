@@ -25,7 +25,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge
 
-from vp_car_sim.vp_models.inference.scene_seg_infer import SceneSegNetworkInfer
+from vp_car_sim.vp_models.pth_pipeline.inference.scene_seg_infer import SceneSegNetworkInfer
 
 # SceneSeg input size + class ids
 MODEL_WIDTH = 640
