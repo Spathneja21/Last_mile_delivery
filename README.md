@@ -134,7 +134,7 @@ run_webcam_publisher.sh  ── publishes ──►  /webcam/image_raw (sensor_m
 | Precision comparison tool | [scripts/compare_precision.py](scripts/compare_precision.py) | Sanity-checks the FP16 `.engine`s against the FP32 `.pth` models — **requires `.pth` checkpoints this repo doesn't ship** (see §8.3); not runnable out of the box. |
 | Timing plot generator | [scripts/plot_timings.py](scripts/plot_timings.py) | Reads `logs/timing_log.csv`, plots per-stage latency. |
 | Command plot generator | [scripts/plot_pipeline_log.py](scripts/plot_pipeline_log.py) | Reads `logs/pipeline_log.csv`, plots velocity/brake/bin distributions. |
-| Model checkpoints | `models/` (gitignored — download from the given links in Section 8.1 | Only `SceneSeg_FP32.onnx`, `Scene3D_FP32.onnx` actually exist — downloaded pre-trained, not trained/exported locally. |
+| Model checkpoints | `models/` (gitignored — download from the given links in Section 8.1) | Only `SceneSeg_FP32.onnx`, `Scene3D_FP32.onnx` actually exist — downloaded pre-trained, not trained/exported locally. |
 
 ---
 
@@ -427,11 +427,11 @@ Neither plotting script is called automatically by the node or its launcher — 
 
 ## 12. Husky Robot Simulation (Gazebo classic, optional)
 
-A ROS 1 catkin checkout of Clearpath's Husky stack lives at `Husky/` (gitignored — a separate nested git clone, not tracked by this repo). It's used to spawn a Husky model in **classic Gazebo** (not Ignition — see §12.4 for why this matters vs. `vp_husky_sim`) and observe/drive it before wiring in the real vision pipeline.
+A ROS 1 catkin checkout of Clearpath's Husky stack lives at `Husky/` (gitignored — a separate nested git clone, not tracked by this repo). It's used to spawn a Husky model in **classic Gazebo** and observe/drive it before wiring in the real vision pipeline.
 
 - **Source:** [Tinker-Twins/Husky](https://github.com/Tinker-Twins/Husky) (a ROS 1 mirror/port of Clearpath's original `husky` meta-repo).
 - **Packages:** `husky_msgs`, `husky_description` (URDF), `husky_control` (twist_mux + `diff_drive_controller` via `ros_control`, EKF localization), `husky_gazebo`/`husky_simulator` (classic Gazebo sim), `husky_navigation` (`move_base` demos), `husky_viz` (RViz configs), `husky_desktop` (teleop tools).
-- **ROS 1 Noetic, not ROS 2** — unlike `vp_husky_sim` (§ vp_husky_sim is unrelated to this; see below), this is directly compatible with the rest of this repo's ROS 1 graph. No bridge needed.
+- **ROS 1 Noetic** — directly compatible with the rest of this repo's ROS 1 graph. No bridge needed.
 
 ### 12.1 One-time setup (verified working on this machine)
 
@@ -482,7 +482,3 @@ This is a keyboard teleop script bundled directly in `husky_control/scripts/` (n
 `twist_mux`'s config (`husky_control/config/twist_mux.yaml`) already defines an `external` input on topic `cmd_vel` (priority 1, lowest — so teleop/joystick can still override it) — which is exactly the topic `webcam_navigator_node.py` publishes to (§4, §7). Topic names line up with no remapping needed if you point your ROS graph at this simulation instead of a real robot.
 
 **Caveat:** this empty-world launch does not wire the simulated Husky's camera to the vision pipeline — there's no camera sensor/topic remap between this Husky URDF and `webcam_navigator_node.py` in either repo. Use §12.2/§12.3 to observe the robot and drivetrain/control behavior standalone (via teleop); closed-loop "vision drives the simulated Husky" testing would need a camera plugin added to the URDF and its topic wired to `IMAGE_TOPIC` in `run_webcam_navigator.sh` (§6) — not currently set up.
-
-### 12.4 Why this isn't `vp_husky_sim`
-
-`src/vp_husky_sim` (documented separately) is a **ROS 2** package using Ignition (`gz sim`), wired to a different, `.pth`-based goal-directed navigator (`vp_car_sim`'s `scene_seg_navigator_node.py`). It requires a ROS 1↔2 bridge to talk to this repo's actual ROS 1 pipeline and only simulates — it does not include a real-hardware driver either. `Husky/` (this section) is unrelated to `vp_husky_sim`, is ROS 1 natively, and is the one that lines up with this repo's actual `webcam_navigator_node.py` / `/cmd_vel` output.
