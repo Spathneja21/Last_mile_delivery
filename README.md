@@ -84,38 +84,38 @@ Both launcher scripts activate the `vp_gpu` environment/`PYTHONPATH` internally 
      │  cv2.VideoCapture
      ▼
 run_webcam_publisher.sh  ── publishes ──►  /webcam/image_raw (sensor_msgs/Image, rgb8, 640x480 @30Hz)
-                                                │
-                                                ▼
-                                    run_webcam_navigator.sh
-                     (env setup: ROS Noetic + vp_gpu venv + TensorRT bindings)
-                                                │  launches
-                                                ▼
-                            webcam_navigator_node.py (rospy node: webcam_navigator_node)
-                                                │  image_cb (per frame)
-                                                ▼
-                        resize 640x480→640x320 (cv2.resize + PIL)
-                                                │
-                        ┌───────────────────────┴───────────────────────┐
-                        ▼                                               ▼
-              SceneSegNetworkInferTRT                          Scene3DNetworkInferTRT
-              (scene_seg_infer_trt.py)                         (scene_3d_infer_trt.py)
-                        │                                               │
-              TensorRT .engine (FP16)                          TensorRT .engine (FP16)
-              on its own CUDA stream                            on its own CUDA stream
-                        │                                               │
-              seg_pred (H,W) class ids                    depth_pred (H,W) relative depth
-                        └───────────────┬───────────────────────────────┘
-                                        ▼
-                        compute_command()  (scene_decision.py)
-                        9-bin scan → steering bearing + depth-weighted obstacle score
-                        → linear/angular velocity + blocked flag
-                                        │
-                                        ▼
-                            geometry_msgs/Twist  ──publishes──►  /cmd_vel
-                                        │
-                                        ├──► logs/pipeline_log.csv   (per-frame command log)
-                                        ├──► logs/timing_log.csv     (per-frame stage latency)
-                                        └──► /vision_pilot/webcam_navigator/overlay (debug image, if subscribed)
+                                            │
+                                            ▼
+                                run_webcam_navigator.sh
+                 (env setup: ROS Noetic + vp_gpu venv + TensorRT bindings)
+                                            │  launches
+                                            ▼
+                        webcam_navigator_node.py (rospy node: webcam_navigator_node)
+                                            │  image_cb (per frame)
+                                            ▼
+                    resize 640x480→640x320 (cv2.resize + PIL)
+                                            │
+                    ┌───────────────────────┴───────────────────────┐
+                    ▼                                               ▼
+          SceneSegNetworkInferTRT                          Scene3DNetworkInferTRT
+          (scene_seg_infer_trt.py)                         (scene_3d_infer_trt.py)
+                    │                                               │
+          TensorRT .engine (FP16)                          TensorRT .engine (FP16)
+          on its own CUDA stream                            on its own CUDA stream
+                    │                                               │
+          seg_pred (H,W) class ids                      depth_pred (H,W) relative depth
+                    └───────────────┬───────────────────────────────┘
+                                    ▼
+                    compute_command()  (scene_decision.py)
+    9-bin scan → steering bearing + depth-weighted obstacle score → linear/angular velocity + blocked flag
+                    
+                                    │
+                                    ▼
+                        geometry_msgs/Twist ── publishes──►  /cmd_vel
+                                    │
+                                    ├──► logs/pipeline_log.csv   (per-frame command log)
+                                    ├──► logs/timing_log.csv     (per-frame stage latency)
+                                    └──► /vision_pilot/webcam_navigator/overlay (debug image, if subscribed)
 ```
 
 ---
@@ -422,3 +422,67 @@ Returns `(linear, angular, info)` — `info` carries all per-bin arrays plus `bl
 | (timing plot) | manually run [scripts/plot_timings.py](scripts/plot_timings.py) (not auto-invoked) | Per-stage latency plots from `timing_log.csv`. |
 
 Neither plotting script is called automatically by the node or its launcher — they're standalone post-hoc analysis tools.
+
+---
+
+## 12. Husky Robot Simulation (Gazebo classic, optional)
+
+A ROS 1 catkin checkout of Clearpath's Husky stack lives at `Husky/` (gitignored — a separate nested git clone, not tracked by this repo). It's used to spawn a Husky model in **classic Gazebo** (not Ignition — see §12.4 for why this matters vs. `vp_husky_sim`) and observe/drive it before wiring in the real vision pipeline.
+
+- **Source:** [Tinker-Twins/Husky](https://github.com/Tinker-Twins/Husky) (a ROS 1 mirror/port of Clearpath's original `husky` meta-repo).
+- **Packages:** `husky_msgs`, `husky_description` (URDF), `husky_control` (twist_mux + `diff_drive_controller` via `ros_control`, EKF localization), `husky_gazebo`/`husky_simulator` (classic Gazebo sim), `husky_navigation` (`move_base` demos), `husky_viz` (RViz configs), `husky_desktop` (teleop tools).
+- **ROS 1 Noetic, not ROS 2** — unlike `vp_husky_sim` (§ vp_husky_sim is unrelated to this; see below), this is directly compatible with the rest of this repo's ROS 1 graph. No bridge needed.
+
+### 12.1 One-time setup (verified working on this machine)
+
+The packages aren't in the catkin workspace by default — symlink them in and build:
+```bash
+cd /data/archit0030/catkin_workspace/src
+for pkg in husky_msgs husky_description husky_control husky_gazebo husky_navigation husky_viz husky_desktop husky_simulator; do
+    ln -s /data/archit0030/last_mile_delivery/Last_mile_delivery/Husky/$pkg $pkg
+done
+
+cd /data/archit0030/catkin_workspace
+catkin_make
+```
+All required ROS dependencies (`gazebo_ros`, `controller_manager`, `diff_drive_controller`, `joint_state_controller`, `robot_localization`, `twist_mux`, `interactive_marker_twist_server`, `joy`, `teleop_twist_joy`) are **already installed** on this machine — `catkin_make` completes with no missing-dependency errors. No `husky_base` (real-hardware serial/CAN driver) is included in this checkout — this stack is for simulation only; see the earlier discussion on what's needed to drive a physical Husky.
+
+> **Gotcha (verified):** run `catkin_make`/`roslaunch`/`xacro` commands with the `vp_gpu` (or any) conda environment **deactivated** (`conda deactivate`). This user's shell activates a conda base env by default, and ROS Noetic's Python tools (`xacro`, etc.) resolve `/usr/bin/env python3` to that conda Python, which lacks `rospkg` — causing `xacro` to fail with `No module named 'rospkg'` and the whole launch to abort. The system Python3 (`/usr/bin/python3`) has `rospkg` installed correctly; conda's does not.
+
+### 12.2 Launching the empty world
+
+```bash
+conda deactivate            # see the gotcha above
+source /opt/ros/noetic/setup.bash
+source /data/archit0030/catkin_workspace/devel/setup.bash
+
+roslaunch husky_gazebo husky_empty_world.launch
+```
+Verified (dry-run, `roslaunch --files` / `--nodes`) to resolve the full include chain and produce this node graph without errors:
+```
+/gazebo, /gazebo_gui                      — classic Gazebo server + GUI, empty world
+/spawn_husky_model                        — spawns the Husky URDF at the origin
+/robot_state_publisher                    — publishes TF from joint states
+/base_controller_spawner                  — loads husky_joint_publisher + husky_velocity_controller
+/twist_mux                                — merges joystick / interactive-marker / external cmd_vel inputs
+/twist_marker_server                      — RViz interactive-marker teleop
+/ekf_localization                         — robot_localization, fuses odom + IMU
+/joy_teleop/joy_node, /joy_teleop/teleop_twist_joy   — joystick teleop (idles harmlessly with no joystick attached)
+```
+This actually starts the Gazebo GUI, so run it interactively (not headless/backgrounded) to watch the robot spawn.
+
+### 12.3 Driving it / observing behavior
+
+To manually drive the spawned Husky and see how it responds (no physical joystick needed):
+```bash
+rosrun husky_control teleop_keyboard.py
+```
+This is a keyboard teleop script bundled directly in `husky_control/scripts/` (not the separate `teleop_twist_keyboard` package) — it publishes `Twist` messages that flow through `twist_mux` → `husky_velocity_controller/cmd_vel` → the simulated differential-drive controller, the same path any `/cmd_vel` publisher (including a real joystick, or `rostopic pub /cmd_vel ...`) would take.
+
+`twist_mux`'s config (`husky_control/config/twist_mux.yaml`) already defines an `external` input on topic `cmd_vel` (priority 1, lowest — so teleop/joystick can still override it) — which is exactly the topic `webcam_navigator_node.py` publishes to (§4, §7). Topic names line up with no remapping needed if you point your ROS graph at this simulation instead of a real robot.
+
+**Caveat:** this empty-world launch does not wire the simulated Husky's camera to the vision pipeline — there's no camera sensor/topic remap between this Husky URDF and `webcam_navigator_node.py` in either repo. Use §12.2/§12.3 to observe the robot and drivetrain/control behavior standalone (via teleop); closed-loop "vision drives the simulated Husky" testing would need a camera plugin added to the URDF and its topic wired to `IMAGE_TOPIC` in `run_webcam_navigator.sh` (§6) — not currently set up.
+
+### 12.4 Why this isn't `vp_husky_sim`
+
+`src/vp_husky_sim` (documented separately) is a **ROS 2** package using Ignition (`gz sim`), wired to a different, `.pth`-based goal-directed navigator (`vp_car_sim`'s `scene_seg_navigator_node.py`). It requires a ROS 1↔2 bridge to talk to this repo's actual ROS 1 pipeline and only simulates — it does not include a real-hardware driver either. `Husky/` (this section) is unrelated to `vp_husky_sim`, is ROS 1 natively, and is the one that lines up with this repo's actual `webcam_navigator_node.py` / `/cmd_vel` output.
