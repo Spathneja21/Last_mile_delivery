@@ -122,19 +122,19 @@ run_webcam_publisher.sh  ── publishes ──►  /webcam/image_raw (sensor_m
 
 ## 3. File locations
 
-| File | Path | Role |
+| File | Role | Path |
 |---|---|---|
-| Publisher launcher | [run_webcam_publisher.sh](run_webcam_publisher.sh) | Starts `webcam_publisher` node — reads `/dev/video0`, publishes `/webcam/image_raw`. |
-| Navigator launcher | [run_webcam_navigator.sh](run_webcam_navigator.sh) | Sets up ROS + Python env, launches `webcam_navigator_node.py` with model/topic params. |
-| Navigator node | [src/vp_car_sim/vp_car_sim/webcam_navigator_node.py](src/vp_car_sim/vp_car_sim/webcam_navigator_node.py) | Main ROS node: subscribes to camera, runs inference, publishes `/cmd_vel`. |
-| SceneSeg TensorRT wrapper | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_seg_infer_trt.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_seg_infer_trt.py) | Loads/runs the SceneSeg `.engine`, returns per-pixel class map. |
-| Scene3D TensorRT wrapper | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_3d_infer_trt.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_3d_infer_trt.py) | Loads/runs the Scene3D `.engine`, returns relative depth map. |
-| Decision logic | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/scene_decision.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/scene_decision.py) | Pure function: seg + depth → `(linear, angular, info)`; also builds the debug overlay image. |
-| Command CSV logger | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/csv_logger.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/csv_logger.py) | Appends per-frame bin/velocity/brake-state rows to `logs/pipeline_log.csv`. |
-| Precision comparison tool | [scripts/compare_precision.py](scripts/compare_precision.py) | Sanity-checks the FP16 `.engine`s against the FP32 `.pth` models — **requires `.pth` checkpoints this repo doesn't ship** (see §8.3); not runnable out of the box. |
-| Timing plot generator | [scripts/plot_timings.py](scripts/plot_timings.py) | Reads `logs/timing_log.csv`, plots per-stage latency. |
-| Command plot generator | [scripts/plot_pipeline_log.py](scripts/plot_pipeline_log.py) | Reads `logs/pipeline_log.csv`, plots velocity/brake/bin distributions. |
-| Model checkpoints | `models/` (gitignored — download from the given links in Section 8.1) | Only `SceneSeg_FP32.onnx`, `Scene3D_FP32.onnx` actually exist — downloaded pre-trained, not trained/exported locally. |
+| Publisher launcher | Starts `webcam_publisher` node — reads `/dev/video0`, publishes `/webcam/image_raw`. | [run_webcam_publisher.sh](run_webcam_publisher.sh) |
+| Navigator launcher | Sets up ROS + Python env, launches `webcam_navigator_node.py` with model/topic params. | [run_webcam_navigator.sh](run_webcam_navigator.sh) |
+| Navigator node | Main ROS node: subscribes to camera, runs inference, publishes `/cmd_vel`. | [src/vp_car_sim/vp_car_sim/webcam_navigator_node.py](src/vp_car_sim/vp_car_sim/webcam_navigator_node.py) |
+| SceneSeg TensorRT wrapper | Loads/runs the SceneSeg `.engine`, returns per-pixel class map. | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_seg_infer_trt.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_seg_infer_trt.py) |
+| Scene3D TensorRT wrapper | Loads/runs the Scene3D `.engine`, returns relative depth map. | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_3d_infer_trt.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/inference/scene_3d_infer_trt.py) |
+| Decision logic | Pure function: seg + depth → `(linear, angular, info)`; also builds the debug overlay image. | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/scene_decision.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/scene_decision.py) |
+| Command CSV logger | Appends per-frame bin/velocity/brake-state rows to `logs/pipeline_log.csv`. | [src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/csv_logger.py](src/vp_car_sim/vp_car_sim/vp_models/trt_pipeline/decision/csv_logger.py) |
+| Precision comparison tool | Sanity-checks the FP16 `.engine`s against the FP32 `.pth` models — **requires `.pth` checkpoints this repo doesn't ship** (see §8.3); not runnable out of the box. | [scripts/compare_precision.py](scripts/compare_precision.py) |
+| Timing plot generator | Reads `logs/timing_log.csv`, plots per-stage latency. | [scripts/plot_timings.py](scripts/plot_timings.py) |
+| Command plot generator | Reads `logs/pipeline_log.csv`, plots velocity/brake/bin distributions. | [scripts/plot_pipeline_log.py](scripts/plot_pipeline_log.py) |
+| Model checkpoints | Only `SceneSeg_FP32.onnx`, `Scene3D_FP32.onnx` actually exist — downloaded pre-trained, not trained/exported locally. | `models/` (gitignored — download from the given links in Section 8.1) |
 
 ---
 
@@ -406,9 +406,83 @@ Given `seg_pred (H,W)` class-id map and `depth_pred (H,W)` relative-depth map (h
 6. **Bin selection**: `best = argmax(score)`; `desired_bearing = bin_bearing[best]`.
 7. **Steering**: `angular = clamp(kp_steer · desired_bearing, ±max_angular_speed)`.
 8. **Braking**: central third of bins checked for `area_blocked` (obstacle coverage ≥ `blocked_stop_fraction`) or `depth_blocked` (proximity ≥ `brake_depth_threshold`); either triggers `blocked=True`.
-9. **Speed**: `block_amount = clamp(max(center_fg/blocked_stop_fraction, center_proximity/brake_depth_threshold), 0, 1)`; `linear = max_linear_speed · (1 − block_amount)` — smooth deceleration as an obstacle is approached, forced to exactly `0` once `blocked` or the required turn exceeds `rotate_in_place_angle` (rotate-in-place first).
+9. **Speed**: `block_amount = clamp(max(center_fg/blocked_stop_fraction, center_proximity/brake_depth_threshold), 0, 1)`; `linear = max_linear_speed · (1 − block_amount)` — smooth deceleration as an obstacle is approached, forced to exactly `0` once `blocked` **or** the required turn exceeds `rotate_in_place_angle`. If `blocked` specifically (not just a wide turn), `angular` is also forced to `0` — a full stop rather than turning in place toward a blocked bearing.
 
 Returns `(linear, angular, info)` — `info` carries all per-bin arrays plus `blocked`/`area_blocked`/`depth_blocked` for logging and overlay rendering.
+
+### 10.1 Pipeline diagram
+
+```
+seg_pred (H,W) class ids                 depth_pred (H,W) relative depth
+          │                                         │
+          └────────────────────┬────────────────────┘
+                                ▼
+                    ROI crop — keep bottom (1 − roi_top_frac) of the frame
+                                │
+                                ▼
+              Per-frame depth normalization within the ROI
+              norm_depth = (roi_depth − d_min) / (d_max − d_min)
+                                │
+                                ▼
+                Column binning — split ROI into num_bins vertical strips
+                                │
+                                ▼
+            Per-bin features (for each of the num_bins strips):
+              fg_frac        — obstacle pixel fraction
+              road_frac      — road pixel fraction
+              fg_proximity   — nearest obstacle's normalized depth
+              bin_bearing    — angular offset from image center (camera_hfov_deg)
+                                │
+                                ▼
+                            Scoring 
+score = road_weight·road_frac[i] − obstacle_weight·fg_frac[i]·(0.5 + 0.5·fg_proximity[i])
+                                │
+                                ▼
+              Bin selection: best = argmax(score) → desired_bearing
+                                │
+                                ▼
+        Steering: angular = clamp(kp_steer · desired_bearing, ±max_angular_speed)
+                                │
+                                ▼
+        Braking check (center third of bins):
+          area_blocked  = center_fg        ≥ blocked_stop_fraction
+          depth_blocked = center_proximity ≥ brake_depth_threshold
+          blocked = area_blocked OR depth_blocked
+                                │
+                                ▼
+        Speed: block_amount = clamp(max(center_fg/blocked_stop_fraction,
+                                         center_proximity/brake_depth_threshold), 0, 1)
+               linear = max_linear_speed · (1 − block_amount)
+                                │
+          ┌─────────────────────┼─────────────────────────────┐
+          ▼                     ▼                             ▼
+    blocked?        |desired_bearing| >                  otherwise
+    linear=0          rotate_in_place_angle?         (linear, angular)
+    angular=0         linear=0, angular kept            as computed
+    (BRAKE,           (ROTATE IN PLACE,                 (CLEAR,
+    full stop)        turn to face new bearing)         drive normally)
+                                │
+                                ▼
+                    return (linear, angular, info)
+```
+
+### 10.2 Tunable parameters (ROS params, `webcam_navigator_node.py` defaults)
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `max_linear_speed` | `0.6` m/s | Forward speed when the path ahead is fully clear (`block_amount = 0`). |
+| `max_angular_speed` | `1.0` rad/s | Clamp on the steering angular velocity. |
+| `kp_steer` | `1.5` | Proportional gain converting `desired_bearing` (rad) into angular velocity. |
+| `num_bins` | `9` | Number of vertical column bins the ROI is split into for scoring. |
+| `roi_top_frac` | `0.4` | Fraction of frame height cropped off the top (sky/horizon) before binning. |
+| `road_weight` | `0.6` | Reward weight for `road_frac` in the per-bin score. |
+| `obstacle_weight` | `2.0` | Penalty weight for `fg_frac` in the per-bin score (further scaled by proximity, up to 2×). |
+| `blocked_stop_fraction` | `0.4` | Center-bin obstacle pixel fraction that triggers `area_blocked`. |
+| `brake_depth_threshold` | `0.75` | Center-bin normalized proximity that triggers `depth_blocked`. |
+| `rotate_in_place_angle` | `0.6` rad | If `\|desired_bearing\|` exceeds this, stop forward motion and rotate in place toward it. |
+| `camera_hfov_deg` | `50.0` deg | Camera horizontal field of view, used to convert bin index into a bearing angle. |
+
+All are ROS private params (`rospy.get_param('~name', default)`) — override per-launch via `_name:=value`, same mechanism as `seg_engine_path`/`depth_engine_path` in §6.
 
 ---
 
