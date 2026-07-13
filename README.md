@@ -1,34 +1,25 @@
 # Last_mile_delivery
 
-# Webcam → SceneSeg/Scene3D TensorRT → `/cmd_vel` Pipeline — Detailed Reference
-
-End-to-end documentation of the live-webcam reactive navigation pipeline: camera capture,
-ROS transport, dual TensorRT (SceneSeg + Scene3D) GPU inference, and the depth-gated
-obstacle-avoidance decision logic that turns model output into `/cmd_vel` commands.
-
-> Environment setup and confirmed GPU / CUDA / TensorRT / PyTorch versions are in §1 — start there.
-
----
 
 ## 1. Environment Setup
 
-This pipeline uses one conda environment (`vp_gpu`) plus ROS Noetic on the same Jetson machine. Set these up before running anything (§1.5 has the quick-start commands).
+This pipeline uses one conda environment (`vp_gpu`) plus ROS Noetic on the same Jetson machine. Set these up before running anything (Section 1.5 has the quick-start commands).
 
 ### 1.1 Confirmed hardware / software versions
 
 | Item | Value |
 |---|---|
 | GPU model | NVIDIA Jetson AGX Orin Developer Kit (64 GB) |
-| L4T / JetPack version | L4T 35.4.1 / JetPack 5.1.2 (`R35.4.1`, per `/etc/nv_tegra_release`) |
-| CUDA version | 11.4.315 (toolkit/`nvcc`); `torch.version.cuda` reports `11.4` |
+| L4T / JetPack version | L4T 35.4.1 / JetPack 5.1.2 |
+| CUDA version | 11.4.315 (toolkit/`nvcc`) |
 | cuDNN version | 8.6.0.166 |
-| TensorRT version (`python3 -c "import tensorrt; print(tensorrt.__version__)"`) | **8.5.2.2** — system-installed (`/usr/lib/python3.8/dist-packages`, apt package `tensorrt=8.5.2.2-1+cuda11.4`), confirmed |
-| PyTorch version (`vp_gpu` env) | **2.1.0a0+41361538.nv23.06** — NVIDIA's Jetson-optimized build, confirmed |
-| torchvision version (`vp_gpu` env) | **0.16.1**, confirmed |
-| Python version (`vp_gpu` env) | 3.8.20 (confirmed — `vp_gpu` env path is `.../python3.8/site-packages`) |
-| ROS distro | ROS 1 Noetic (confirmed — `source /opt/ros/noetic/setup.bash`) |
-| `trtexec` build command used for the committed `.engine` files | `TODO` — not present in this repo, see §8.2 |
-| ONNX FP32 model source | Downloaded pre-trained from [AutowareFoundation/vision_pilot](https://github.com/autowarefoundation/vision_pilot) — not trained or exported locally, see §8.1 |
+| TensorRT version | **8.5.2.2** |
+| PyTorch version (`vp_gpu` env) | **2.1.0a0+41361538.nv23.06** — NVIDIA's Jetson-optimized build |
+| torchvision version (`vp_gpu` env) | **0.16.1** |
+| Python version (`vp_gpu` env) | 3.8.20 |
+| ROS distro | ROS 1 Noetic |
+| `trtexec` build command used for the committed `.engine` files | see Section 8.2 |
+| ONNX FP32 model source | Downloaded pre-trained from [AutowareFoundation/vision_pilot](https://github.com/autowarefoundation/vision_pilot) — not trained or exported locally, see Section 8.1 |
 
 ### 1.2 Environments involved
 
@@ -56,10 +47,9 @@ conda activate vp_gpu
 #      torchvision == 0.16.1
 pip install numpy==1.24.4 pillow==10.4.0 onnx==1.17.0 opencv-python-headless
 
-# 4. Do NOT pip install `tensorrt` inside this env — it's intentionally left out and
-#    resolved instead via PYTHONPATH at launch time (see run_webcam_navigator.sh, §6).
+# 4. Do NOT pip install `tensorrt` inside this env — it's intentionally left out 
 ```
-`vp_gpu` is the **only** conda environment this pipeline uses — both `run_webcam_publisher.sh` (camera capture) and `run_webcam_navigator.sh` (inference) run under it; only the `PYTHONPATH` layering each script exports differs (§5, §6).
+`vp_gpu` is the **only** conda environment this pipeline uses — both `run_webcam_publisher.sh` (camera capture) and `run_webcam_navigator.sh` (inference) run under it; only the `PYTHONPATH` layering each script exports differs (Section 5,6).
 
 > TODO: the exact wheel filenames/URLs used to install `torch`/`torchvision` into `vp_gpu` are not captured anywhere in this repo — record them here next time this env is rebuilt from scratch.
 
@@ -83,7 +73,7 @@ roscore
 # terminal 3 — navigator (vp_gpu env, CUDA + TensorRT inference)
 ./run_webcam_navigator.sh
 ```
-Both launcher scripts activate the `vp_gpu` environment/`PYTHONPATH` internally (see §5 and §6) — no manual `conda activate` needed before running them.
+Both launcher scripts activate the `vp_gpu` environment/`PYTHONPATH` internally — no manual `conda activate` needed before running them.
 
 ---
 
@@ -141,12 +131,10 @@ run_webcam_publisher.sh  ── publishes ──►  /webcam/image_raw (sensor_m
 | Scene3D TensorRT wrapper | [src/vp_car_sim/vp_car_sim/vp_models/inference/scene_3d_infer_trt.py](src/vp_car_sim/vp_car_sim/vp_models/inference/scene_3d_infer_trt.py) | Loads/runs the Scene3D `.engine`, returns relative depth map. |
 | Decision logic | [src/vp_car_sim/vp_car_sim/vp_models/decision/scene_decision.py](src/vp_car_sim/vp_car_sim/vp_models/decision/scene_decision.py) | Pure function: seg + depth → `(linear, angular, info)`; also builds the debug overlay image. |
 | Command CSV logger | [src/vp_car_sim/vp_car_sim/vp_models/decision/csv_logger.py](src/vp_car_sim/vp_car_sim/vp_models/decision/csv_logger.py) | Appends per-frame bin/velocity/brake-state rows to `logs/pipeline_log.csv`. |
-| Plain-PyTorch SceneSeg (non-TRT) | [src/vp_car_sim/vp_car_sim/vp_models/inference/scene_seg_infer.py](src/vp_car_sim/vp_car_sim/vp_models/inference/scene_seg_infer.py) | `nn.Module`-based inference path carried over from the upstream [vision_pilot](https://github.com/autowarefoundation/vision_pilot) reference implementation. **Not usable in this repo** — the `.pth` checkpoint it expects (`SceneSeg.pth`) isn't present in `models/` (see §8.3). Not used by the webcam navigator. |
-| Model architecture (SceneSeg) | [src/vp_car_sim/vp_car_sim/vp_models/model_components/scene_seg_network.py](src/vp_car_sim/vp_car_sim/vp_models/model_components/scene_seg_network.py), [backbone.py](src/vp_car_sim/vp_car_sim/vp_models/model_components/backbone.py) | Defines `Backbone → SceneContext → SceneNeck → SceneSegHead`. Carried over from upstream `vision_pilot` for reference only — no `.pth` weights exist in this repo to load into it, and it's **not imported** by the TensorRT runtime path. |
 | Precision comparison tool | [scripts/compare_precision.py](scripts/compare_precision.py) | Sanity-checks the FP16 `.engine`s against the FP32 `.pth` models — **requires `.pth` checkpoints this repo doesn't ship** (see §8.3); not runnable out of the box. |
 | Timing plot generator | [scripts/plot_timings.py](scripts/plot_timings.py) | Reads `logs/timing_log.csv`, plots per-stage latency. |
 | Command plot generator | [scripts/plot_pipeline_log.py](scripts/plot_pipeline_log.py) | Reads `logs/pipeline_log.csv`, plots velocity/brake/bin distributions. |
-| Model checkpoints | `models/` (gitignored — too large for GitHub) | Only `SceneSeg_FP32.onnx`, `SceneSeg_FP16.engine`, `Scene3D_FP32.onnx`, `Scene3D_FP16.engine` actually exist — downloaded pre-trained, not trained/exported locally (see §8.1). No `.pth` files are present, despite being referenced as default paths in `compare_precision.py`. |
+| Model checkpoints | `models/` (gitignored — download from the given links in Section 8.1 | Only `SceneSeg_FP32.onnx`, `Scene3D_FP32.onnx` actually exist — downloaded pre-trained, not trained/exported locally. |
 
 ---
 
