@@ -1,0 +1,296 @@
+================================================================================
+ VisionPilot .pth Pipeline (ROS 2 + Gazebo Ignition) -- Detailed Reference
+================================================================================
+
+Companion document to README.md. README.md documents the REAL, currently-
+runnable pipeline: ROS 1 Noetic + a live USB webcam + TensorRT FP16 engines
+(vp_models/trt_pipeline/). This document covers the OTHER pipeline that lives
+in the same repo: a ROS 2 + Gazebo Ignition simulation stack that loads the
+plain-PyTorch .pth checkpoints directly (vp_models/pth_pipeline/) and does
+goal-directed navigation instead of pure reactive obstacle avoidance.
+
+STATUS: NOT RUNNABLE ON THIS MACHINE TODAY.
+  1. No ROS 2 distro is installed here at all (only /opt/ros/noetic exists).
+     rclpy, ros_gz_sim, ros_gz_bridge are not installed anywhere on this host.
+  2. No .pth checkpoint files exist in models/ -- this repo's actual model
+     source is downloaded pre-trained ONNX (see README.md Section 8.1), and
+     no .pth was ever added alongside it.
+  3. The Ignition CLI binaries (ign / gz) ARE present, but that alone is not
+     enough -- the ROS 2 Python packages that bridge Gazebo <-> ROS 2 topics
+     are missing.
+This document describes the pipeline as it is written, so it can be stood up
+later if/when a ROS 2 environment + the three .pth checkpoints are available.
+
+
+--------------------------------------------------------------------------------
+1. FILE LOCATIONS
+--------------------------------------------------------------------------------
+
+  Role                          | Path
+  -------------------------------+----------------------------------------------
+  Goal-directed navigator node   | src/vp_car_sim/vp_car_sim/scene_seg_navigator_node.py
+  Navigator launch               | src/vp_car_sim/launch/scene_seg_navigate.launch.py
+  Simulated car + Gazebo bridge  | src/vp_car_sim/launch/vp_car_sim.launch.py
+  SceneSeg overlay-only node     | src/vp_car_sim/vp_car_sim/scene_seg_node.py
+  SceneSeg overlay-only launch   | src/vp_car_sim/launch/scene_seg.launch.py
+  Scene3D overlay-only node      | src/vp_car_sim/vp_car_sim/scene_3d_node.py
+  Scene3D overlay-only launch    | src/vp_car_sim/launch/scene_3d.launch.py
+  Real-webcam overlay demo       | src/vp_car_sim/launch/webcam_scene_seg.launch.py
+                                 |   (v4l2_camera + scene_seg_node + scene_3d_node,
+                                 |    overlay-only -- does NOT publish /cmd_vel)
+  SceneSeg plain-PyTorch wrapper | src/vp_car_sim/vp_car_sim/vp_models/pth_pipeline/
+                                 |   inference/scene_seg_infer.py
+  Scene3D plain-PyTorch wrapper  | src/vp_car_sim/vp_car_sim/vp_models/pth_pipeline/
+                                 |   inference/scene_3d_infer.py
+  SceneSeg architecture          | src/vp_car_sim/vp_car_sim/vp_models/pth_pipeline/
+                                 |   model_components/{backbone,scene_context,
+                                 |   scene_neck,scene_seg_head,scene_seg_network}.py
+  Scene3D architecture           | src/vp_car_sim/vp_car_sim/vp_models/pth_pipeline/
+                                 |   model_components/{pre_trained_backbone,
+                                 |   depth_context,scene_3d_neck,scene_3d_head,
+                                 |   scene_3d_network}.py
+  Precision comparison tool      | scripts/compare_precision.py
+                                 |   (loads both .pth models AND the .engine
+                                 |    files -- also blocked on missing .pth)
+
+
+--------------------------------------------------------------------------------
+2. ENVIRONMENT THIS PIPELINE WOULD NEED (not currently set up)
+--------------------------------------------------------------------------------
+
+  Item                      | Requirement
+  --------------------------+------------------------------------------------
+  ROS distro                | ROS 2 (rclpy) -- NOT installed on this machine
+  Simulator                 | Gazebo Ignition ("gz sim" / ign gazebo) -- the
+                            |   ign/gz CLI binaries exist here, but the ROS 2
+                            |   <-> Gazebo bridge packages do not
+  ROS 2 packages needed     | rclpy, ros_gz_sim, ros_gz_bridge, robot_state_publisher,
+                            |   xacro, rviz2, cv_bridge -- none confirmed installed
+  Python model runtime      | Any PyTorch build that matches the checkpoint's
+                            |   training environment (unlike the TensorRT
+                            |   pipeline, no Jetson-specific wheel is required
+                            |   here since there's no TensorRT engine involved)
+  Model checkpoints needed  | SceneSeg .pth (required by scene_seg_navigator_node.py)
+                            | Scene3D .pth (only for the standalone scene_3d_node.py
+                            |   overlay demo -- the navigator itself never uses depth)
+                            | Neither ships in this repo's models/ directory.
+
+
+--------------------------------------------------------------------------------
+3. PIPELINE OVERVIEW (goal-directed navigator, the main entry point)
+--------------------------------------------------------------------------------
+
+  [Gazebo Ignition sim: vp_car or Husky model]
+              |  simulated camera + odometry
+              v
+  /<robot>/front_camera/image_raw (sensor_msgs/Image)   /odom (nav_msgs/Odometry)
+              |                                                |
+              +---------------------+       +-------------------+
+                                    v       v
+                          scene_seg_navigator_node.py  (rclpy node: scene_seg_navigator)
+                                    |
+                                    |  image_cb (per camera frame)
+                                    v
+                   resize to 640x320 (PIL) --> SceneSegNetworkInfer.inference()
+                                    |            (plain PyTorch .pth model,
+                                    |             CPU or CUDA if available)
+                                    v
+                       seg_pred (H,W) SceneSeg class ids
+                                    |
+                                    v
+                     compute_command(seg_pred, heading_error, dist_to_goal, p)
+                     9-bin scan -> goal-alignment + road/free-space score
+                                    -  obstacle-density penalty
+                     --> steering bearing, no depth/Scene3D input at all
+                                    |
+                                    v
+                  control_cb (separate timer, watchdog-gated) publishes:
+                                    |
+                                    v
+                       geometry_msgs/Twist --> /cmd_vel
+                                    |
+                                    +--> overlay_image() --> /vision_pilot/navigator/overlay
+                                          (only if something is subscribed)
+
+  Key differences from the TRT pipeline (README.md Section 2):
+    - Goal-directed: drives toward a fixed (goal_x, goal_y) in the /odom frame,
+      not purely reactive. Stops once within goal_tolerance of the goal.
+    - SceneSeg only. No Scene3D/depth signal feeds the navigator at all.
+    - Camera source is a simulated Gazebo topic, not a live USB webcam.
+    - Runs on plain PyTorch (CPU or CUDA), not TensorRT FP16 engines.
+
+
+--------------------------------------------------------------------------------
+4. ROS 2 TOPICS & PARAMETERS (scene_seg_navigator_node.py)
+--------------------------------------------------------------------------------
+
+  Topic/Param              | Default                               | Notes
+  -------------------------+---------------------------------------+----------------
+  checkpoint_path          | '' (REQUIRED -- raises if empty)      | SceneSeg .pth path
+  image_topic              | /husky/front_camera/image_raw         | sensor_msgs/Image
+  odom_topic               | /odom                                 | nav_msgs/Odometry
+  cmd_vel_topic            | /cmd_vel                              | geometry_msgs/Twist
+  overlay_topic            | /vision_pilot/navigator/overlay       | sensor_msgs/Image, debug
+  goal_x, goal_y           | 0.0, 0.0                              | target position, odom frame
+  goal_tolerance           | 1.5 (m)                               | stop-and-hold radius
+  max_linear_speed         | 0.6 (m/s)                             | speed when fully clear
+  max_angular_speed        | 1.0 (rad/s)                           | steering clamp
+  kp_steer                 | 1.5                                   | bearing -> angular gain
+  num_bins                 | 9                                     | column bins scored per frame
+  roi_top_frac             | 0.4                                   | crop fraction off the top
+  goal_weight              | 1.0                                   | reward: bin points at goal bearing
+  road_weight              | 0.6                                   | reward: road pixel fraction
+  obstacle_weight          | 2.0                                   | penalty: obstacle pixel fraction
+  blocked_stop_fraction    | 0.4                                   | center-bin fg fraction -> forced stop
+  rotate_in_place_angle    | 0.6 (rad)                             | big turns -> stop and rotate first
+  camera_hfov_deg          | 50.0 (deg)                            | bin index -> bearing conversion
+  control_rate             | 10.0 (Hz)                             | control_cb timer rate
+  image_timeout            | 2.0 (s)                               | watchdog: zero cmd if stale
+
+
+--------------------------------------------------------------------------------
+5. DECISION LOGIC DIAGRAM (compute_command, scene_seg_navigator_node.py)
+--------------------------------------------------------------------------------
+
+  seg_pred (H,W) class ids       heading_error (rad, to goal)     dist_to_goal (m)
+            |                              |                            |
+            +---------------+--------------+----------------------------+
+                            v
+              dist_to_goal <= goal_tolerance ?
+                    |                     |
+                   yes                    no
+                    |                     v
+                    v          ROI crop -- keep bottom (1 - roi_top_frac)
+              linear=0                    |
+              angular=0                   v
+              (GOAL REACHED,   Column binning -- split ROI into num_bins strips
+               hold position)             |
+                                           v
+                            Per-bin features: fg_frac, road_frac, bin_bearing
+                                           |
+                                           v
+                    goal_align = 1 - |bin_bearing - heading_error| / pi
+                                           |
+                                           v
+        score = goal_weight * goal_align + road_weight * road_frac
+                                          - obstacle_weight * fg_frac
+                                           |
+                                           v
+                    best = argmax(score) --> desired_bearing
+                                           |
+                                           v
+          angular = clamp(kp_steer * desired_bearing, +/- max_angular_speed)
+                                           |
+                                           v
+             center_fg = max(fg_frac) over central third of bins
+             block = min(1, center_fg / blocked_stop_fraction)
+             linear = max_linear_speed * (1 - block)
+                                           |
+                    center_fg >= blocked_stop_fraction
+                    OR |desired_bearing| > rotate_in_place_angle ?
+                    |                                  |
+                   yes                                 no
+                    v                                  v
+              linear = 0                    (linear, angular) as computed
+              (angular UNCHANGED --          (drive normally toward goal)
+               keeps turning to find
+               a way through/around)
+                                           |
+                                           v
+                          return (linear, angular, info)
+
+  Note the difference from the TRT pipeline's decision logic (README.md
+  Section 10.1): here, "blocked" only ever zeroes linear, never angular --
+  the robot keeps steering toward the best-scoring bin even while stopped,
+  since without a depth signal there's no distinction between "a wide
+  obstacle right in front" (worth rotating to route around) and a true
+  dead-end. The TRT pipeline's Scene3D depth signal is what enables it to
+  additionally zero angular on a real block.
+
+
+--------------------------------------------------------------------------------
+6. MODEL ARCHITECTURE (SceneSeg, shared by both scene_seg_navigator_node.py
+   and the standalone scene_seg_node.py overlay demo)
+--------------------------------------------------------------------------------
+
+  SceneSegNetwork (model_components/scene_seg_network.py):
+
+    input image (3, 320, 640)
+            |
+            v
+    Backbone (backbone.py)
+      torchvision efficientnet_b0, ImageNet-pretrained
+      returns 5 intermediate feature maps [l0, l2, l3, l4, l8]
+            |
+            v  (deepest feature map, l8/features[4])
+    SceneContext (scene_context.py)
+            |
+            v
+    SceneNeck (scene_neck.py)  <-- also takes the full feature list
+            |
+            v
+    SceneSegHead (scene_seg_head.py)  <-- also takes the full feature list
+            |
+            v
+    output: per-pixel class logits (3 classes: 0=background, 1=foreground/
+            obstacle, 2=road) at (3, 320, 640)
+
+  SceneSegNetworkInfer (inference/scene_seg_infer.py):
+    - Loads a .pth state_dict into SceneSegNetwork via torch.load(...,
+      weights_only=True) -- raises ValueError if no checkpoint_path given.
+    - Runs on CUDA if torch.cuda.is_available(), else CPU.
+    - Preprocessing: ToTensor + ImageNet Normalize(mean, std) -- same
+      constants as the TRT pipeline (README.md Section 9.5).
+    - inference(image): requires an exact 640x320 PIL image (raises
+      ValueError otherwise); returns (H, W) int class-id array via
+      argmax over the channel dimension.
+
+  Scene3DNetwork / Scene3DNetworkInfer follow the identical shape, swapping
+  in pre_trained_backbone.py + depth_context.py + scene_3d_neck.py +
+  scene_3d_head.py, and returning a single-channel continuous relative-depth
+  map instead of a class-id map. Only used by the standalone scene_3d_node.py
+  overlay demo and by scripts/compare_precision.py -- the goal-directed
+  navigator (Section 3-5 above) never touches Scene3D at all.
+
+
+--------------------------------------------------------------------------------
+7. LAUNCHING (once ROS 2 + the .pth checkpoints are available)
+--------------------------------------------------------------------------------
+
+  # 1. Bring up the simulated car + Gazebo Ignition bridge:
+  ros2 launch vp_car_sim vp_car_sim.launch.py world:=vp_track.world rviz:=false
+
+  # 2. In a second terminal, launch the goal-directed navigator:
+  ros2 launch vp_car_sim scene_seg_navigate.launch.py \
+      checkpoint_path:=/path/to/SceneSeg.pth \
+      image_topic:=/vp_car/front_camera/image_raw \
+      goal_x:=40.0 goal_y:=0.0
+
+  # Standalone overlay-only demos (no /cmd_vel, just visualize predictions):
+  ros2 launch vp_car_sim scene_seg.launch.py checkpoint_path:=/path/to/SceneSeg.pth
+  ros2 launch vp_car_sim scene_3d.launch.py checkpoint_path:=/path/to/Scene3D.pth
+  ros2 launch vp_car_sim webcam_scene_seg.launch.py \
+      checkpoint_path:=/path/to/SceneSeg.pth \
+      depth_checkpoint_path:=/path/to/Scene3D.pth
+      # (real USB webcam via v4l2_camera instead of Gazebo -- still overlay-only)
+
+  None of the above have been run/verified on this machine -- see Section 2's
+  STATUS note. Treat these as the shape the commands should take, not a
+  verified transcript.
+
+
+--------------------------------------------------------------------------------
+8. OPEN ITEMS
+--------------------------------------------------------------------------------
+
+  - No ROS 2 install on this machine (rclpy, ros_gz_sim, ros_gz_bridge missing).
+  - No SceneSeg.pth / Scene3D.pth checkpoint files anywhere in this repo.
+  - scripts/compare_precision.py depends on both of the above too -- it's the
+    one tool that bridges this pipeline and the TRT pipeline (loads a .pth
+    model AND a .engine side by side to sanity-check FP16 accuracy loss), so
+    it's blocked by the same two gaps.
+  - vp_car_sim.launch.py's world spawn uses `ign gazebo` (this host's older,
+    pre-rebrand Ignition Fortress package only ships `ign`, not `gz` -- see
+    the comment in vp_car_sim.launch.py itself). Confirm this still matches
+    whatever Ignition/Gazebo version is present whenever this is revisited.
+================================================================================

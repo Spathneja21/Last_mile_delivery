@@ -18,8 +18,8 @@ This pipeline uses one conda environment (`vp_gpu`) plus ROS Noetic on the same 
 | torchvision version (`vp_gpu` env) | **0.16.1** |
 | Python version (`vp_gpu` env) | 3.8.20 |
 | ROS distro | ROS 1 Noetic |
-| `trtexec` build command used for the committed `.engine` files | see Section 8.2 |
-| ONNX FP32 model source | Downloaded pre-trained from [AutowareFoundation/vision_pilot](https://github.com/autowarefoundation/vision_pilot) — not trained or exported locally, see Section 8.1 |
+| `trtexec` build command used for the committed `.engine` files | see Section 9.2 |
+| ONNX FP32 model source | Downloaded pre-trained from [AutowareFoundation/vision_pilot](https://github.com/autowarefoundation/vision_pilot) — not trained or exported locally, see Section 9.1 |
 
 ### 1.2 Environments involved
 
@@ -134,7 +134,7 @@ run_webcam_publisher.sh  ── publishes ──►  /webcam/image_raw (sensor_m
 | Precision comparison tool | Sanity-checks the FP16 `.engine`s against the FP32 `.pth` models — **requires `.pth` checkpoints this repo doesn't ship** (see §8.3); not runnable out of the box. | [scripts/compare_precision.py](scripts/compare_precision.py) |
 | Timing plot generator | Reads `logs/timing_log.csv`, plots per-stage latency. | [scripts/plot_timings.py](scripts/plot_timings.py) |
 | Command plot generator | Reads `logs/pipeline_log.csv`, plots velocity/brake/bin distributions. | [scripts/plot_pipeline_log.py](scripts/plot_pipeline_log.py) |
-| Model checkpoints | Only `SceneSeg_FP32.onnx`, `Scene3D_FP32.onnx` actually exist — downloaded pre-trained, not trained/exported locally. | `models/` (gitignored — download from the given links in Section 8.1) |
+| Model checkpoints | Only `SceneSeg_FP32.onnx`, `Scene3D_FP32.onnx` actually exist — downloaded pre-trained, not trained/exported locally. | `models/` (gitignored — download from the given links in Section 9.1) |
 
 ---
 
@@ -229,40 +229,68 @@ exec "$VP_GPU_PY" "$NODE" \
 
 ---
 
-## 7. `webcam_navigator_node.py` — the ROS node
+## 7. `run_side_by_side.sh` — visualization
+
+[run_side_by_side.sh](run_side_by_side.sh) combines multiple debug image streams into a single side-by-side view for easy visual inspection, instead of having to open several image viewers at once.
+
+**What it does:** launches [scripts/side_by_side_view.py](scripts/side_by_side_view.py), a ROS node that subscribes to up to three image topics and republishes them horizontally concatenated (`raw | SceneSeg/Scene3D overlay | YOLO overlay`) on one output topic:
+
+```bash
+RAW_TOPIC="/webcam/image_raw"
+OVERLAY_TOPIC="/vision_pilot/webcam_navigator/overlay"
+YOLO_OVERLAY_TOPIC="/vision_pilot/yolo_detector/overlay"
+OUT_TOPIC="/vision_pilot/side_by_side"
+```
+The YOLO panel is optional and additive — `side_by_side_view.py` only appends it once at least one frame has actually arrived on `YOLO_OVERLAY_TOPIC`, so this works unchanged whether or not `yolo_detector_node` is running; with it running, the layout becomes `raw | seg/depth overlay | YOLO overlay`.
+
+**Environment:** unlike `run_webcam_publisher.sh`/`run_webcam_navigator.sh` (both now `vp_gpu`, per §1.3), this script still runs under the `lerobot` conda/miniforge environment's Python 3.10 (`cv2`, `numpy`, `rospy` only — no CUDA/TensorRT/PyTorch needed for a pure image-concatenation node).
+
+**When to run it — what must already be running first:**
+1. `roscore`
+2. `run_webcam_publisher.sh` — publishes `/webcam/image_raw`, the `raw` panel's source.
+3. `run_webcam_navigator.sh` — publishes `/vision_pilot/webcam_navigator/overlay`, the middle panel's source. Recall from §8.3 (`image_cb` step 7): the navigator only renders/publishes that overlay at all if something is subscribed to it — so starting `run_side_by_side.sh` is *what triggers* the navigator to start producing that panel, not just a passive viewer of it.
+4. *(Optional)* `run_yolo_detector.sh`, if you also want the third YOLO panel — otherwise the output is just the two-panel `raw | overlay` view.
+
+Once all of the above are running, view the combined stream with `rqt_image_view /vision_pilot/side_by_side` (or any other `sensor_msgs/Image` viewer).
+
+---
+
+## 8. `webcam_navigator_node.py` — the ROS node
 
 [webcam_navigator_node.py](src/vp_car_sim/vp_car_sim/webcam_navigator_node.py)
 
-### 7.1 Pure-Python `cv_bridge` replacement (lines 40-61)
+### 8.1 Pure-Python `cv_bridge` replacement (lines 40-61)
 The standard ROS `cv_bridge` package is a C++ extension pinned to a specific NumPy ABI; rather than fight a NumPy 2.x incompatibility, this file hand-rolls the two conversions it needs:
 - `imgmsg_to_rgb8(msg)`: `np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)`, with a channel-reversal if `encoding == 'bgr8'`.
 - `rgb8_to_imgmsg(arr, header)`: the inverse — builds a `sensor_msgs/Image` from a NumPy array (used for the overlay publish).
 
-### 7.2 `__init__` — node bring-up
+### 8.2 `__init__` — node bring-up
 - `rospy.init_node('webcam_navigator_node', anonymous=False)` — fixed name, only one instance expected.
 - Reads `seg_engine_path` / `depth_engine_path` params; **fatal-exits** (`rospy.logfatal` + `sys.exit(1)`) if either is empty — the node refuses to start without both TensorRT engines.
 - Reads the full decision-logic parameter dict `self.p` (steering gain, ROI fraction, obstacle/road weights, braking thresholds, bin count, camera field of view) — all with defaults, all overridable via ROS params.
-- Instantiates `SceneSegNetworkInferTRT(engine_path=seg_engine_path)` and `Scene3DNetworkInferTRT(engine_path=depth_engine_path)` — this is where the `.engine` files are deserialized and GPU memory/CUDA streams are allocated (see §9).
+- Instantiates `SceneSegNetworkInferTRT(engine_path=seg_engine_path)` and `Scene3DNetworkInferTRT(engine_path=depth_engine_path)` — this is where the `.engine` files are deserialized and GPU memory/CUDA streams are allocated (see §10).
 - Sets up two CSV logs: `CommandLogger` (per-frame decision output) and a raw `csv.writer` for per-stage timing.
 - Publishers: `cmd_pub` (`/cmd_vel`, `Twist`, `queue_size=10`), `overlay_pub` (overlay topic, `Image`, `queue_size=1`).
 - Subscribers: `image_topic` → `image_cb` (`queue_size=1`, `buff_size=2**24` — 16 MB buffer, since a 640×480×3 raw image is ~921 KB and would overflow ROS's default 64 KB transport buffer).
 
-### 7.3 `image_cb` — the per-frame pipeline (the core loop)
+### 8.3 `image_cb` — the per-frame pipeline (the core loop)
 Runs once per `/webcam/image_raw` message:
 
 1. **Preprocess** (`t0→t1`): `imgmsg_to_rgb8(msg)` decodes the raw bytes to a `(480, 640, 3)` NumPy array; `cv2.resize(cv_image, (640, 320))` squashes it to `MODEL_WIDTH×MODEL_HEIGHT = 640×320` (the fixed TensorRT input shape); wrapped in a PIL `Image` for `torchvision.transforms` compatibility.
-2. **Dual async GPU launch**: `self.seg_model.launch_async(pil)` then `self.depth_model.launch_async(pil)` — both enqueue their preprocessing + TensorRT kernel execution on their own dedicated CUDA stream and return immediately (non-blocking). See §9 for the CUDA mechanics.
-3. **Sync + fetch** (`t1→t3`): `seg_pred = self.seg_model.fetch_result()` blocks until the seg stream finishes (`t2`); `depth_pred = self.depth_model.fetch_result().squeeze(-1)` blocks until the depth stream finishes (`t3`). Because both kernels were launched before either sync point, their GPU execution overlaps — see §8/§9 for the measured savings.
-4. **Decision** (`t3→t4`): `compute_command(seg_pred, depth_pred, self.p)` → `(v, w, info)` (full breakdown in §10). Logged via `CommandLogger.log(...)`.
+2. **Dual async GPU launch**: `self.seg_model.launch_async(pil)` then `self.depth_model.launch_async(pil)` — both enqueue their preprocessing + TensorRT kernel execution on their own dedicated CUDA stream and return immediately (non-blocking). See §10 for the CUDA mechanics.
+3. **Sync + fetch** (`t1→t3`): `seg_pred = self.seg_model.fetch_result()` blocks until the seg stream finishes (`t2`); `depth_pred = self.depth_model.fetch_result().squeeze(-1)` blocks until the depth stream finishes (`t3`). Because both kernels were launched before either sync point, their GPU execution overlaps — see §9/§10 for the measured savings.
+4. **Decision** (`t3→t4`): `compute_command(seg_pred, depth_pred, self.p)` → `(v, w, info)` (full breakdown in §11). Logged via `CommandLogger.log(...)`.
 5. **Publish** (`t4→t5`): builds and publishes the `Twist` on `/cmd_vel`. Also computes `e2e_ms = (rospy.Time.now() - msg.header.stamp) * 1000` — true glass-to-glass latency from camera capture to command publish, as distinct from `total_ms` (in-callback compute time only).
 6. **Logging**: writes one row to `logs/timing_log.csv` (`frame, pre_ms, seg_ms, depth_ms, post_ms, pub_ms, total_ms, e2e_ms`) and one `loginfo` line to the console per frame.
 7. **Overlay** (conditional): only rendered/published if `overlay_pub.get_num_connections() > 0` — `overlay_image(seg_pred, depth_pred, info, self.p)` builds a colorized debug frame (road=green, obstacles=red intensity-scaled by proximity, chosen bin highlighted yellow, BRAKE/CLEAR banner), converted back to a `sensor_msgs/Image` and published.
 
 ---
 
-## 8. Model checkpoint chain: downloaded ONNX FP32 → `.engine`
+## 9. Model checkpoint chain: downloaded ONNX FP32 → `.engine`
 
 **This pipeline does not train or export these models.** No `.pth` checkpoint is trained, held, or converted locally — `SceneSeg_FP32.onnx` and `Scene3D_FP32.onnx` are downloaded directly as pre-trained artifacts, and the only step actually performed on this machine is the FP32 → FP16 TensorRT engine build.
+
+> A separate, currently-non-runnable ROS 2 pipeline that loads `.pth` checkpoints directly (instead of ONNX/TensorRT) also lives in this repo — see [docs/pth_pipeline.txt](docs/pth_pipeline.txt).
 
 Evidence from `models/` (file listing, `.gitignore`d from this repo due to size):
 ```
@@ -272,9 +300,9 @@ SceneSeg_FP16.engine   # TensorRT engine built locally from the ONNX graph, FP16
 Scene3D_FP32.onnx      # downloaded pre-trained ONNX FP32 model (Scene3D)
 Scene3D_FP16.engine    # ← used by webcam_navigator_node.py
 ```
-No `.pth` files exist in `models/` — `SceneSeg.pth` / `scene3D.pth` are only referenced as unused default CLI args in `scripts/compare_precision.py` (carried over from the upstream reference implementation, §8.3) and are not present.
+No `.pth` files exist in `models/` — `SceneSeg.pth` / `scene3D.pth` are only referenced as unused default CLI args in `scripts/compare_precision.py` (carried over from the upstream reference implementation, §9.3) and are not present.
 
-### 8.1 Model source (downloaded, not trained)
+### 9.1 Model source (downloaded, not trained)
 `SceneSeg_FP32.onnx` and `Scene3D_FP32.onnx` are downloaded pre-trained model files, sourced from the [AutowareFoundation/vision_pilot](https://github.com/autowarefoundation/vision_pilot) project:
 
 | Model | Task | Source |
@@ -282,9 +310,9 @@ No `.pth` files exist in `models/` — `SceneSeg.pth` / `scene3D.pth` are only r
 | `SceneSeg_FP32.onnx` | Scene segmentation | [Google Drive link](https://drive.google.com/file/d/1l-dniunvYyFKvLD7k16Png3AsVTuMl9f/view?usp=drive_link) |
 | `Scene3D_FP32.onnx` | Scene3D relative depth | [Google Drive link](https://drive.google.com/file/d/19gMPt_1z4eujo4jm5XKuH-8eafh-wJC6/view?usp=drive_link) |
 
-Both links are the pre-exported FP32 ONNX weights published by `vision_pilot` — no training, fine-tuning, or `torch.onnx.export(...)` step happens in this repo. Download each file into `models/` under the names above before running §8.2's engine build.
+Both links are the pre-exported FP32 ONNX weights published by `vision_pilot` — no training, fine-tuning, or `torch.onnx.export(...)` step happens in this repo. Download each file into `models/` under the names above before running §9.2's engine build.
 
-### 8.2 TensorRT engine build (`.engine`) — the only step actually performed locally
+### 9.2 TensorRT engine build (`.engine`) — the only step actually performed locally
 `SceneSeg_FP16.engine` / `Scene3D_FP16.engine` are built from the downloaded ONNX files using NVIDIA's `trtexec` CLI tool (ships with the TensorRT install):
 ```bash
 trtexec --onnx=models/SceneSeg_FP32.onnx  --saveEngine=models/SceneSeg_FP16.engine  --fp16
@@ -296,19 +324,19 @@ A TensorRT engine is **hardware- and version-locked**: it's compiled against the
 
 > GPU model, CUDA version, and TensorRT version for the machine these `.engine` files run on are recorded in §1 (this machine's local `trtexec` also reports v8.5.2, matching). The exact build flags are still not captured — see the TODO row in §1.1.
 
-### 8.3 Unused reference code inherited from `vision_pilot`
+### 9.3 Unused reference code inherited from `vision_pilot`
 `model_components/` ([scene_seg_network.py](src/vp_car_sim/vp_car_sim/vp_models/model_components/scene_seg_network.py), [backbone.py](src/vp_car_sim/vp_car_sim/vp_models/model_components/backbone.py), etc.), `scene_seg_infer.py`, and `scripts/compare_precision.py`'s `.pth` code paths are carried over from the upstream `vision_pilot` reference implementation (`Backbone` — `efficientnet_b0` — feeding `SceneContext → SceneNeck → SceneSegHead`). They describe the architecture the ONNX/engine files were originally trained with, but since no `.pth` weights are present in this repo, none of this code is actually runnable here — it's documentation-by-reference only, not a live code path.
 
 ### Why the navigator uses the `.engine`, not the `.onnx`
-`scene_seg_infer_trt.py` / `scene_3d_infer_trt.py` (§9) never import `model_components/` or ONNX Runtime at all — they load the `.engine` directly via `tensorrt.Runtime.deserialize_cuda_engine()`. All architecture + weights + FP16 kernel selection are already baked into that binary; the Python wrapper's only remaining job is preprocessing, binding I/O memory addresses, and launching/syncing the precompiled kernels. This is the fastest of the two representations for repeated real-time inference, which is why it's the one wired into `run_webcam_navigator.sh`.
+`scene_seg_infer_trt.py` / `scene_3d_infer_trt.py` (§10) never import `model_components/` or ONNX Runtime at all — they load the `.engine` directly via `tensorrt.Runtime.deserialize_cuda_engine()`. All architecture + weights + FP16 kernel selection are already baked into that binary; the Python wrapper's only remaining job is preprocessing, binding I/O memory addresses, and launching/syncing the precompiled kernels. This is the fastest of the two representations for repeated real-time inference, which is why it's the one wired into `run_webcam_navigator.sh`.
 
 ---
 
-## 9. CUDA processing methodology (`scene_seg_infer_trt.py` / `scene_3d_infer_trt.py`)
+## 10. CUDA processing methodology (`scene_seg_infer_trt.py` / `scene_3d_infer_trt.py`)
 
 Both wrapper classes (identical structure, different engine) follow the same three-phase design: **one-time setup**, **async launch**, **blocking fetch**.
 
-### 9.1 One-time setup (`__init__`)
+### 10.1 One-time setup (`__init__`)
 ```python
 with open(engine_path, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime:
     self.engine = runtime.deserialize_cuda_engine(f.read())
@@ -333,7 +361,7 @@ self._live_tensor = None
 - Each model gets its **own dedicated CUDA stream**. A CUDA stream is an ordered queue of GPU operations; operations on *different* streams can execute concurrently on the GPU (hardware permitting). This is the mechanism that lets SceneSeg and Scene3D run **in parallel** rather than one blocking the other.
 - `_live_tensor`: a reference-keeping slot preventing Python's garbage collector from freeing the input tensor's GPU memory while an async kernel might still be reading it via a raw pointer.
 
-### 9.2 Async launch (`launch_async`, per frame)
+### 10.2 Async launch (`launch_async`, per frame)
 ```python
 with torch.inference_mode(), torch.cuda.stream(self.stream):
     image_tensor = self.image_loader(image).unsqueeze(0).to(self.device).contiguous()
@@ -350,7 +378,7 @@ with torch.inference_mode(), torch.cuda.stream(self.stream):
 - `set_tensor_address(...)`: binds the engine's input/output slots directly to GPU memory addresses — TensorRT reads/writes those exact locations with **zero additional copying**.
 - `execute_async_v3(stream_handle)`: enqueues the compiled kernel(s) on the given stream and **returns immediately** — this is what makes the call "async"; the CPU thread is not blocked waiting for GPU completion.
 
-### 9.3 Concurrency in practice (`webcam_navigator_node.py`, `image_cb`)
+### 10.3 Concurrency in practice (`webcam_navigator_node.py`, `image_cb`)
 ```python
 self.seg_model.launch_async(pil)     # enqueue on stream A, returns immediately
 self.depth_model.launch_async(pil)   # enqueue on stream B, returns immediately
@@ -359,7 +387,7 @@ depth_pred = self.depth_model.fetch_result()  # blocks until stream B done (ofte
 ```
 Because both launches happen before either `fetch_result()` blocks, the GPU executes both models' kernels **concurrently** rather than sequentially. Measured from this repo's own `logs/timing_log.csv` (1929 frames): `seg_ms` averaged **65.25 ms**, `depth_ms` (the *residual* wait after seg already finished) averaged **46.29 ms** — implying depth's own kernel takes roughly the full ~111 ms span but is almost entirely hidden behind seg's execution. A naive sequential implementation (`seg.inference()` then `depth.inference()`, fully blocking each) would cost roughly `65 + 111 ≈ 176 ms`; the concurrent version measured **~111.5 ms** (`seg_ms + depth_ms`) — an estimated **~35–40% latency reduction** from stream-level concurrency alone.
 
-### 9.4 Blocking fetch (`fetch_result`, per frame)
+### 10.4 Blocking fetch (`fetch_result`, per frame)
 ```python
 def fetch_result(self):
     self.stream.synchronize()
@@ -386,7 +414,7 @@ return prediction.numpy()   # (H, W, 1) — single-channel relative depth
 ```
 Returns the raw `(H, W, 1)` float array unchanged (no argmax needed — depth is a continuous regression output, not a class prediction). `webcam_navigator_node.py` immediately applies `.squeeze(-1)` to drop that trailing channel-of-1 dimension, giving a clean `(H, W)` array matching `seg_pred`'s shape (needed for element-wise/boolean-mask alignment in `compute_command`).
 
-### 9.5 Preprocessing normalization (both models)
+### 10.5 Preprocessing normalization (both models)
 ```python
 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ```
@@ -394,7 +422,7 @@ Standard ImageNet channel statistics — required because the shared `Backbone` 
 
 ---
 
-## 10. Decision logic (`compute_command`, `scene_decision.py`)
+## 11. Decision logic (`compute_command`, `scene_decision.py`)
 
 Given `seg_pred (H,W)` class-id map and `depth_pred (H,W)` relative-depth map (higher = nearer):
 
@@ -410,7 +438,7 @@ Given `seg_pred (H,W)` class-id map and `depth_pred (H,W)` relative-depth map (h
 
 Returns `(linear, angular, info)` — `info` carries all per-bin arrays plus `blocked`/`area_blocked`/`depth_blocked` for logging and overlay rendering.
 
-### 10.1 Pipeline diagram
+### 11.1 Pipeline diagram
 
 ```
 seg_pred (H,W) class ids                 depth_pred (H,W) relative depth
@@ -466,7 +494,7 @@ score = road_weight·road_frac[i] − obstacle_weight·fg_frac[i]·(0.5 + 0.5·f
                     return (linear, angular, info)
 ```
 
-### 10.2 Tunable parameters (ROS params, `webcam_navigator_node.py` defaults)
+### 11.2 Tunable parameters (ROS params, `webcam_navigator_node.py` defaults)
 
 | Parameter | Default | Meaning |
 |---|---|---|
@@ -486,7 +514,7 @@ All are ROS private params (`rospy.get_param('~name', default)`) — override pe
 
 ---
 
-## 11. Logging outputs
+## 12. Logging outputs
 
 | File | Written by | Columns / content |
 |---|---|---|
@@ -499,7 +527,7 @@ Neither plotting script is called automatically by the node or its launcher — 
 
 ---
 
-## 12. Husky Robot Simulation (Gazebo classic, optional)
+## 13. Husky Robot Simulation (Gazebo classic, optional)
 
 A ROS 1 catkin checkout of Clearpath's Husky stack lives at `Husky/` (gitignored — a separate nested git clone, not tracked by this repo). It's used to spawn a Husky model in **classic Gazebo** and observe/drive it before wiring in the real vision pipeline.
 
@@ -507,7 +535,7 @@ A ROS 1 catkin checkout of Clearpath's Husky stack lives at `Husky/` (gitignored
 - **Packages:** `husky_msgs`, `husky_description` (URDF), `husky_control` (twist_mux + `diff_drive_controller` via `ros_control`, EKF localization), `husky_gazebo`/`husky_simulator` (classic Gazebo sim), `husky_navigation` (`move_base` demos), `husky_viz` (RViz configs), `husky_desktop` (teleop tools).
 - **ROS 1 Noetic** — directly compatible with the rest of this repo's ROS 1 graph. No bridge needed.
 
-### 12.1 One-time setup (verified working on this machine)
+### 13.1 One-time setup (verified working on this machine)
 
 The packages aren't in the catkin workspace by default — symlink them in and build:
 ```bash
@@ -523,7 +551,7 @@ All required ROS dependencies (`gazebo_ros`, `controller_manager`, `diff_drive_c
 
 > **Gotcha (verified):** run `catkin_make`/`roslaunch`/`xacro` commands with the `vp_gpu` (or any) conda environment **deactivated** (`conda deactivate`). This user's shell activates a conda base env by default, and ROS Noetic's Python tools (`xacro`, etc.) resolve `/usr/bin/env python3` to that conda Python, which lacks `rospkg` — causing `xacro` to fail with `No module named 'rospkg'` and the whole launch to abort. The system Python3 (`/usr/bin/python3`) has `rospkg` installed correctly; conda's does not.
 
-### 12.2 Launching the empty world
+### 13.2 Launching the empty world
 
 ```bash
 conda deactivate            # see the gotcha above
@@ -545,7 +573,7 @@ Verified (dry-run, `roslaunch --files` / `--nodes`) to resolve the full include 
 ```
 This actually starts the Gazebo GUI, so run it interactively (not headless/backgrounded) to watch the robot spawn.
 
-### 12.3 Driving it / observing behavior
+### 13.3 Driving it / observing behavior
 
 To manually drive the spawned Husky and see how it responds (no physical joystick needed):
 ```bash
@@ -553,6 +581,6 @@ rosrun husky_control teleop_keyboard.py
 ```
 This is a keyboard teleop script bundled directly in `husky_control/scripts/` (not the separate `teleop_twist_keyboard` package) — it publishes `Twist` messages that flow through `twist_mux` → `husky_velocity_controller/cmd_vel` → the simulated differential-drive controller, the same path any `/cmd_vel` publisher (including a real joystick, or `rostopic pub /cmd_vel ...`) would take.
 
-`twist_mux`'s config (`husky_control/config/twist_mux.yaml`) already defines an `external` input on topic `cmd_vel` (priority 1, lowest — so teleop/joystick can still override it) — which is exactly the topic `webcam_navigator_node.py` publishes to (§4, §7). Topic names line up with no remapping needed if you point your ROS graph at this simulation instead of a real robot.
+`twist_mux`'s config (`husky_control/config/twist_mux.yaml`) already defines an `external` input on topic `cmd_vel` (priority 1, lowest — so teleop/joystick can still override it) — which is exactly the topic `webcam_navigator_node.py` publishes to (§4, §8). Topic names line up with no remapping needed if you point your ROS graph at this simulation instead of a real robot.
 
-**Caveat:** this empty-world launch does not wire the simulated Husky's camera to the vision pipeline — there's no camera sensor/topic remap between this Husky URDF and `webcam_navigator_node.py` in either repo. Use §12.2/§12.3 to observe the robot and drivetrain/control behavior standalone (via teleop); closed-loop "vision drives the simulated Husky" testing would need a camera plugin added to the URDF and its topic wired to `IMAGE_TOPIC` in `run_webcam_navigator.sh` (§6) — not currently set up.
+**Caveat:** this empty-world launch does not wire the simulated Husky's camera to the vision pipeline — there's no camera sensor/topic remap between this Husky URDF and `webcam_navigator_node.py` in either repo. Use §13.2/§13.3 to observe the robot and drivetrain/control behavior standalone (via teleop); closed-loop "vision drives the simulated Husky" testing would need a camera plugin added to the URDF and its topic wired to `IMAGE_TOPIC` in `run_webcam_navigator.sh` (§6) — not currently set up.
