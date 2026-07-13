@@ -6,16 +6,14 @@ End-to-end documentation of the live-webcam reactive navigation pipeline: camera
 ROS transport, dual TensorRT (SceneSeg + Scene3D) GPU inference, and the depth-gated
 obstacle-avoidance decision logic that turns model output into `/cmd_vel` commands.
 
-> CUDA / TensorRT / driver version numbers are intentionally left as placeholders (`TODO`)
-> — fill in from `nvidia-smi`, `python3 -c "import tensorrt; print(tensorrt.__version__)"`,
-> and `python3 -c "import torch; print(torch.__version__, torch.version.cuda)"` on the
-> machine actually running `run_webcam_navigator.sh`.
+> GPU / CUDA / TensorRT / PyTorch version numbers for the deployment machine are recorded
+> in §10.
 
 ```
 [/dev/video0]
      │  cv2.VideoCapture
      ▼
-run_webcam_publisher.sh  ──publishes──►  /webcam/image_raw  (sensor_msgs/Image, rgb8, 640x480 @30Hz)
+run_webcam_publisher.sh  ── publishes ──►  /webcam/image_raw  (sensor_msgs/Image, rgb8, 640x480 @30Hz)
                                                 │
                                                 ▼
                                 run_webcam_navigator.sh
@@ -25,16 +23,16 @@ run_webcam_publisher.sh  ──publishes──►  /webcam/image_raw  (sensor_ms
                             webcam_navigator_node.py  (rospy node: webcam_navigator_node)
                                                 │
                         ┌───────────────────────┼───────────────────────┐
-                        │ image_cb (per frame)   │                       │ nl_intent_cb
-                        ▼                        ▼                       ▼
+                        │ image_cb (per frame)  │                       │ nl_intent_cb
+                        ▼                       ▼                       ▼
               resize 640x480→640x320   SceneSegNetworkInferTRT   Scene3DNetworkInferTRT   /vision_pilot/nl_intent
               (cv2.resize + PIL)       (scene_seg_infer_trt.py)  (scene_3d_infer_trt.py)   (std_msgs/String, JSON)
-                        │                        │                       │
+                        │                       │                       │
                         │              TensorRT .engine (FP16)  TensorRT .engine (FP16)
                         │              on its own CUDA stream    on its own CUDA stream
-                        │                        │                       │
+                        │                       │                       │
                         │              seg_pred (H,W) class ids   depth_pred (H,W) relative depth
-                        └───────────────┬────────┴───────────────────────┘
+                        └───────────────┬───────┴───────────────────────┘
                                         ▼
                         compute_command()  (scene_decision.py)
                         9-bin scan → steering bearing + depth-weighted obstacle score
@@ -367,18 +365,18 @@ Neither plotting script is called automatically by the node or its launcher — 
 
 ---
 
-## 10. Environment / version placeholders (fill in later)
+## 10. Environment / versions (confirmed on the deployment machine)
 
 | Item | Value |
 |---|---|
-| GPU model | `TODO` |
-| NVIDIA driver version | `TODO` |
-| CUDA version (`nvcc --version` / `torch.version.cuda`) | `TODO` |
-| cuDNN version | `TODO` |
-| TensorRT version (`python3 -c "import tensorrt; print(tensorrt.__version__)"`) | `TODO` (script comment references **8.5.2**, system-installed — confirm) |
-| PyTorch version (`vp_gpu` env) | `TODO` (script comment references **torch 2.1.0**) |
-| torchvision version (`vp_gpu` env) | `TODO` (script comment references **0.16.1**) |
-| Python version (`vp_gpu` env) | 3.8 (confirmed — `vp_gpu` env path is `.../python3.8/site-packages`) |
+| GPU model | NVIDIA Jetson AGX Orin Developer Kit (64 GB) |
+| L4T / JetPack version | L4T 35.4.1 / JetPack 5.1.2 (`R35.4.1`, per `/etc/nv_tegra_release`) |
+| CUDA version | 11.4.315 (toolkit/`nvcc`); `torch.version.cuda` reports `11.4` |
+| cuDNN version | 8.6.0.166 |
+| TensorRT version (`python3 -c "import tensorrt; print(tensorrt.__version__)"`) | **8.5.2.2** — system-installed (`/usr/lib/python3.8/dist-packages`, apt package `tensorrt=8.5.2.2-1+cuda11.4`), confirmed |
+| PyTorch version (`vp_gpu` env) | **2.1.0a0+41361538.nv23.06** — NVIDIA's Jetson-optimized build, confirmed |
+| torchvision version (`vp_gpu` env) | **0.16.1**, confirmed |
+| Python version (`vp_gpu` env) | 3.8.20 (confirmed — `vp_gpu` env path is `.../python3.8/site-packages`) |
 | ROS distro | ROS 1 Noetic (confirmed — `source /opt/ros/noetic/setup.bash`) |
 | `trtexec` build command used for the committed `.engine` files | `TODO` — not present in this repo, see §6 |
 | `torch.onnx.export(...)` call used for the committed `.onnx` files | `TODO` — not present in this repo, see §6 |
