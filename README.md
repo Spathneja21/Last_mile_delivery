@@ -583,3 +583,131 @@ This is a keyboard teleop script bundled directly in `husky_control/scripts/` (n
 `twist_mux`'s config (`husky_control/config/twist_mux.yaml`) already defines an `external` input on topic `cmd_vel` (priority 1, lowest — so teleop/joystick can still override it) — which is exactly the topic `webcam_navigator_node.py` publishes to (§4, §8). Topic names line up with no remapping needed if you point your ROS graph at this simulation instead of a real robot.
 
 **Caveat:** this empty-world launch does not wire the simulated Husky's camera to the vision pipeline — there's no camera sensor/topic remap between this Husky URDF and `webcam_navigator_node.py` in either repo. Use §13.2/§13.3 to observe the robot and drivetrain/control behavior standalone (via teleop); closed-loop "vision drives the simulated Husky" testing would need a camera plugin added to the URDF and its topic wired to `IMAGE_TOPIC` in `run_webcam_navigator.sh` (§6) — not currently set up.
+
+---
+
+## 14. Merged Pipeline (GPS road-follow + vision avoidance) — GPS layer
+
+Sections 1–13 document the vision-only pipeline (`webcam_navigator_node.py`). The merged pipeline
+(§13's Husky sim + `map_app.py` + `road_network.py` + [fusion_navigator_node.py](fusion_navigator_node.py))
+adds GPS/IMU road-following as the primary navigation source, with vision arbitrating only when the
+path ahead is blocked. `fusion_navigator_node.py` is the **sole `/cmd_vel` publisher** in this mode —
+`webcam_navigator_node.py`, `road_path_navigator_node.py`, `gps_navigator_node.py`, and
+`waypoint_path_node.py` must not run alongside it (see [cmds.md](cmds.md), "MERGED PIPELINE").
+
+### 14.1 GPS/IMU ROS parameters (`fusion_navigator_node.py` defaults)
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `anchor_lat` | `31.781306` | Latitude origin for the local flat-earth (ENU) projection — every GPS fix and waypoint is converted to metres relative to this point. |
+| `anchor_lon` | `76.997611` | Longitude origin, paired with `anchor_lat`. |
+| `intermediate_tolerance` | `1.0` m | Distance to a waypoint that counts as "reached" for any non-final waypoint. |
+| `final_tolerance` | `0.5` m | Tighter reach tolerance for the last waypoint (the actual destination). |
+| `pose_timeout` | `1.0` s | GPS or IMU readings older than this are treated as stale — the robot stops rather than steer on outdated pose. |
+| `course_min_dist` | `0.4` m | Minimum GPS displacement between heading-offset calibration samples — shorter legs are too noisy to bearing-estimate reliably. |
+| `offset_filter_alpha` | `0.3` | Low-pass filter weight (0–1) for updating the learned heading offset after the first calibration sample. |
+| `calib_min_speed` | `0.15` m/s | Minimum commanded forward speed for a calibration sample to be trusted (must actually be moving). |
+| `calib_max_turn` | `0.25` rad/s | Maximum commanded angular speed for a calibration sample to be trusted (must be driving ~straight). |
+| `bootstrap_speed` | `0.3` m/s | Open-loop forward speed used before the heading offset is calibrated at all, purely to generate GPS displacement to measure. |
+| `kp_linear` | `0.5` | Proportional gain: forward speed scales with distance to the next waypoint. |
+| `kp_angular` | `1.5` | Proportional gain on heading error → angular velocity. |
+| `ki_angular` | `0.02` | Integral gain — small, steady-state bias correction only. |
+| `kd_angular` | `0.3` | Derivative gain — damping to reduce heading overshoot. |
+| `max_linear_speed` | `0.6` m/s | Hard cap on commanded forward speed. |
+| `max_angular_speed` | `1.0` rad/s | Hard cap on commanded angular speed (also the PID output clamp). |
+| `rotate_in_place_angle` | `0.6` rad | If heading error exceeds this, stop translating and rotate in place first. |
+| `control_rate` | `10.0` Hz | Frequency of the main control loop (`dt = 1/control_rate`). |
+
+### 14.2 GPS/IMU topics
+
+| Topic | Type | Direction | Notes |
+|---|---|---|---|
+| `/navsat/fix` | `sensor_msgs/NavSatFix` | subscribe | Raw GPS fix; converted to local XY every message. |
+| `/imu/data` | `sensor_msgs/Imu` | subscribe | Orientation quaternion; only yaw is extracted. |
+| `/gps/path` | `std_msgs/String` (JSON waypoint list) | subscribe | Published by `map_app.py`; a new message fully replaces the active path. |
+| `/replan_request` | `std_msgs/Empty` | publish | Debounced request for `map_app.py` to reroute from current position to the stored destination. |
+| `/cmd_vel` | `geometry_msgs/Twist` | publish | `linear.x`/`angular.z`, same convention as §4. |
+
+### 14.3 Coordinate & heading formulas
+
+**Lat/lon → local ENU metres** (equirectangular projection around `anchor_lat`/`anchor_lon`):
+```
+x_east  = EARTH_RADIUS_M · radians(lon − anchor_lon) · cos(radians(anchor_lat))
+y_north = EARTH_RADIUS_M · radians(lat − anchor_lat)
+EARTH_RADIUS_M = 6,371,000
+```
+Valid at robot scale (tens of metres); the same flat-earth assumption `road_network.py`'s path
+densifier makes.
+
+**Quaternion → yaw** (Z-axis rotation only):
+```
+siny_cosp = 2·(w·z + x·y)
+cosy_cosp = 1 − 2·(y² + z²)
+yaw = atan2(siny_cosp, cosy_cosp)
+```
+
+**Heading-offset calibration** — the IMU's yaw frame is not guaranteed to match GPS/ENU heading, so
+the offset between them is learned empirically while driving straight ([`_update_heading_offset`](fusion_navigator_node.py)):
+```
+# once displacement since the last sample ≥ course_min_dist, and the robot
+# was driving straight enough (calib_min_speed / calib_max_turn gates):
+gps_course      = atan2(Δy, Δx)                              # bearing from GPS displacement
+measured_offset = normalize_angle(gps_course − imu_yaw)
+
+# first valid sample:
+heading_offset = measured_offset
+
+# every sample after:
+delta          = normalize_angle(measured_offset − heading_offset)
+heading_offset = normalize_angle(heading_offset + offset_filter_alpha · delta)
+```
+`corrected_yaw = normalize_angle(imu_yaw + heading_offset)` is the true heading used everywhere
+downstream. Until `heading_offset` has its first sample, the node drives open-loop straight at
+`bootstrap_speed` (steering would be meaningless against an uncalibrated frame).
+
+**Angle wrap:**
+```
+normalize_angle(a) = atan2(sin(a), cos(a))     # wraps to [-π, π]
+```
+
+**Heading error to the next waypoint** (body-frame, +left/+yaw per REP-103):
+```
+road_err = normalize_angle( atan2(gy − y, gx − x) − corrected_yaw )
+```
+where `(x, y)` is the robot's current local position and `(gx, gy)` is the next waypoint's.
+
+**Heading PID → angular velocity** ([`heading_pid`](fusion_navigator_node.py)):
+```
+if sign(heading_error) != sign(prev_error):      # crossed the target -> stale bias
+    integral = 0
+integral += heading_error · dt
+integral  = clamp(integral, ±0.2·max_angular_speed / ki_angular)   # anti-windup
+derivative = (heading_error − prev_error) / dt
+angular    = kp_angular·heading_error + ki_angular·integral + kd_angular·derivative
+angular    = clamp(angular, ±max_angular_speed)
+```
+
+**Forward speed** (FOLLOW mode, no obstacle):
+```
+linear = 0                              if |heading_error| > rotate_in_place_angle
+linear = min(max_linear_speed, kp_linear · dist)   otherwise
+```
+
+**Cross-track error** (perpendicular distance to the current planned segment, clamped at the
+endpoints — used to decide when to request a replan):
+```
+t   = clamp( ((px−ax)(bx−ax) + (py−ay)(by−ay)) / |b−a|² , 0, 1 )
+d   = | p − (a + t·(b−a)) |
+```
+
+**Replan trigger** ([`_maybe_replan`](fusion_navigator_node.py)):
+```
+fire /replan_request when:
+    cross_track ≥ replan_dist                          (default 3.0 m)
+    AND vision is not currently reporting "blocked"
+    AND (now − last_replan_time) ≥ replan_min_interval  (default 5.0 s)
+```
+
+> Vision-arbitration parameters/formulas (`vision_timeout`, `clear_score_min`, the FOLLOW/AVOID/BLOCKED
+> branching in `_arbitrate`) belong to the perception side and are documented separately — see
+> §11 for the underlying `compute_command()` scoring these advisories are built from.
