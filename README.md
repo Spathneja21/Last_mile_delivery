@@ -79,44 +79,189 @@ Both launcher scripts activate the `vp_gpu` environment/`PYTHONPATH` internally 
 
 ## 2. Pipeline Overview
 
+This is one system: the **last-mile delivery pipeline**. A human picks a destination on a browser
+map; the robot routes to it over an OpenStreetMap road graph and follows that path with GPS+IMU,
+deviating around obstacles the camera sees and re-routing once past them — all without further human
+input. The single architecture diagram below traces the whole thing in one place — every node,
+topic, and HTTP endpoint, plus the vision perception internals — from the browser click down to
+`/cmd_vel` and back around the replan loop.
+
+The TensorRT perception core (SceneSeg + Scene3D + `compute_command()`, expanded inside the
+`vision_avoidance_node` block below) also has a **standalone variant**, `webcam_navigator_node.py`,
+that drives `/cmd_vel` directly from vision with no GPS/map (documented in §5–§12) — useful for
+perception-only bring-up, but it must **not** run alongside the fusion navigator, since both own
+`/cmd_vel` (see [cmds.md](cmds.md)). §14 documents the GPS/IMU control side in formula detail;
+§9–§11 document the perception core.
+
+### 2.1 Full system architecture
+
 ```
-[/dev/video0]
-     │  cv2.VideoCapture
-     ▼
-run_webcam_publisher.sh  ── publishes ──►  /webcam/image_raw (sensor_msgs/Image, rgb8, 640x480 @30Hz)
-                                            │
-                                            ▼
-                                run_webcam_navigator.sh
-                 (env setup: ROS Noetic + vp_gpu venv + TensorRT bindings)
-                                            │  launches
-                                            ▼
-                        webcam_navigator_node.py (rospy node: webcam_navigator_node)
-                                            │  image_cb (per frame)
-                                            ▼
-                    resize 640x480→640x320 (cv2.resize + PIL)
-                                            │
-                    ┌───────────────────────┴───────────────────────┐
-                    ▼                                               ▼
-          SceneSegNetworkInferTRT                          Scene3DNetworkInferTRT
-          (scene_seg_infer_trt.py)                         (scene_3d_infer_trt.py)
-                    │                                               │
-          TensorRT .engine (FP16)                          TensorRT .engine (FP16)
-          on its own CUDA stream                            on its own CUDA stream
-                    │                                               │
-          seg_pred (H,W) class ids                      depth_pred (H,W) relative depth
-                    └───────────────┬───────────────────────────────┘
-                                    ▼
-                    compute_command()  (scene_decision.py)
-    9-bin scan → steering bearing + depth-weighted obstacle score → linear/angular velocity + blocked flag
-                    
-                                    │
-                                    ▼
-                        geometry_msgs/Twist ── publishes──►  /cmd_vel
-                                    │
-                                    ├──► logs/pipeline_log.csv   (per-frame command log)
-                                    ├──► logs/timing_log.csv     (per-frame stage latency)
-                                    └──► /vision_pilot/webcam_navigator/overlay (debug image, if subscribed)
+╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗
+║  HUMAN — BROWSER  (map.html, Google Maps JavaScript API)                                          ║
+║    click map → POST /api/set-path (preview)      Approve button → POST /api/approve-path (go)     ║
+║    Clear → POST /api/clear-trail                                                                  ║
+║    poll: GET /api/robot-pose (5 Hz) · /api/robot-trail (1 Hz) · /api/road-nodes|edges (once)      ║
+╚════════════════════════════════════════╤══════════════════════════════════════════════════════════╝
+                                         │ HTTP POST  :5000                     ▲ 
+                                         ▼  (Flask, CORS enabled)               │ HTTP GET (JSON)
+╔═══════════════════════════════════════════════════════════════════════════════╧════════════════════╗
+║  map_app.py      ROS node 'web_bridge_node'  +  Flask REST server (:5000)                          ║
+║  ─────────────────────────────────────────────────────────────────────────────────────────────     ║
+║  road_network.py:  load map/*.osm.pbf → networkx graph (cached .pkl)                               ║
+║  _build_path(dest):  route_latlon() Dijkstra shortest path  →  densify_latlon() to 2 m             ║
+║                      (shared by /api/set-path preview AND the /replan_request reroute)             ║
+║  ROS subs: /navsat/fix (update pose + record 1 Hz trail) · /replan_request (auto-reroute)          ║
+║  ROS pubs: /gps/path (String JSON waypoints) · /gps/target (NavSatFix, legacy/unused by fusion)    ║
+╚════════╤═════════════════════════════════════════════════════════════════════════▲═════════════════╝
+         │ /gps/path                                                               │ /replan_request
+         │ (String, JSON [{latitude,longitude},…])                                 │ (Empty)
+         ▼                                                                         │
+╔══════════════════════════════════════════════════════════════════════════════════╧══════════════════╗
+║  fusion_navigator_node.py     node 'fusion_navigator_node'     ★ SOLE /cmd_vel OWNER ★              ║
+║  ─────────────────────────────────────────────────────────────────────────────────────────────      ║
+║  subs: /gps/path · /navsat/fix · /imu/data · /vision/avoidance                                      ║
+║  GPS+IMU heading PID follows the road path (§14); heading offset self-calibrated from GPS course    ║
+║  _arbitrate():  FOLLOW road  ▸  else AVOID toward clearest vision bin  ▸  else BLOCKED (rotate)     ║
+║  cross-track error > replan_dist AND path clear again  →  publish /replan_request                   ║
+║  pubs: /cmd_vel (Twist) · /replan_request (Empty)                                                   ║
+╚════════╤═══════════════════════════════════▲═════════════════════════════════════════▲══════════════╝
+         │ /cmd_vel (Twist)                  │ /vision/avoidance                       │ /navsat/fix (40 Hz)
+         ▼                                   │ (String, JSON advisory)                 │ /imu/data
+╔═════════════════════════════╗              │                                         │
+║  Husky Gazebo sim           ║──────────────┼─────────────────────────────────────────┘
+║  (husky_empty_world.launch) ║   publishes /navsat/fix (NavSatFix, 40 Hz), /imu/data (Imu)
+║  base + GPS + IMU plugins   ║   substitute a real robot base to deploy on hardware
+╚════════╤════════════════════╝
+         │ camera frames  (or /dev/video0 on a dev box)
+         ▼
+╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗
+║  webcam_publisher   (run_webcam_publisher.sh)     /dev/video0 → BGR→RGB → /webcam/image_raw       ║
+╚════════╤══════════════════════════════════════════════════════════════════════════════════════════╝
+         │ /webcam/image_raw (sensor_msgs/Image, rgb8, 640×480 @30 Hz)
+         ▼
+╔═════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║  vision_avoidance_node.py    node 'vision_avoidance_node'    — ADVISOR, never touches /cmd_vel      ║
+║  ┌──────────────────────  SHARED PERCEPTION CORE  (§9–§11) ──────────────────────────────────────┐  ║
+║  │  resize 640×480 → 640×320                                                                     │  ║
+║  │      ├─► SceneSegNetworkInferTRT  (FP16 .engine, CUDA stream A) → seg_pred  (H,W) class ids   │  ║
+║  │      └─► Scene3DNetworkInferTRT   (FP16 .engine, CUDA stream B) → depth_pred (H,W) rel. depth │  ║
+║  │            both launched async → run CONCURRENTLY on the GPU (§10)                            │  ║
+║  │      → compute_command() (scene_decision.py): 9-bin scan, depth-weighted score, blocked flag  │  ║
+║  └───────────────────────────────────────────────────────────────────────────────────────────────┘  ║
+║  pubs: /vision/avoidance = {blocked, block_amount, desired_bearing,                                 ║
+║                             bin_bearings[], bin_clear[], center_proximity, stamp}                   ║
+║        /vision_pilot/vision_avoidance/overlay   (debug image, only if subscribed)                   ║
+╚═════════════════════════════════════════════════════════════════════════════════════════════════════╝
+   (standalone variant: webcam_navigator_node.py hosts the SAME core but publishes /cmd_vel directly —
+    no GPS/map; do NOT run it alongside the fusion navigator. See §5–§12.)
+
+  One delivery, end to end:
+    1. click map   → POST /api/set-path    → map_app routes (Dijkstra + densify) → red preview drawn
+    2. Approve     → POST /api/approve-path → map_app publishes /gps/path
+    3. fusion_navigator follows /gps/path via GPS+IMU PID, arbitrating the vision advisory each tick
+    4. obstacle    → AVOID detour; once clear AND off-line by > replan_dist → publish /replan_request
+    5. map_app reroutes from the robot's CURRENT pose to the SAME destination → re-publishes /gps/path
+    6. destination reached (within final_tolerance) → /cmd_vel = 0, robot stops.
 ```
+
+### 2.2 ROS nodes
+
+| Node (rospy name) | Launched by | Subscribes | Publishes | Role |
+|---|---|---|---|---|
+| `web_bridge_node` | `map_app.py` (background thread; Flask owns main thread) | `/navsat/fix`, `/replan_request` | `/gps/path`, `/gps/target` | Map/HTTP ↔ ROS bridge. Serves the REST API on `:5000`, routes destinations over the road graph, records the GPS trail, and auto-reroutes on replan requests. |
+| `webcam_publisher` | `run_webcam_publisher.sh` | — (`/dev/video0`) | `/webcam/image_raw` | Camera → ROS bridge (BGR→RGB, 640×480 @30 Hz). |
+| `vision_avoidance_node` | `run_vision_advisory.sh` | `/webcam/image_raw` | `/vision/avoidance`, `/vision_pilot/vision_avoidance/overlay` | Perception **advisor** — runs SceneSeg + Scene3D + `compute_command()` and publishes what it sees as JSON. **Does not touch `/cmd_vel`.** |
+| `fusion_navigator_node` | `run_fusion_navigator.sh` | `/gps/path`, `/navsat/fix`, `/imu/data`, `/vision/avoidance` | `/cmd_vel`, `/replan_request` | **Sole `/cmd_vel` owner.** GPS+IMU road-follow PID, arbitrated against the vision advisory; requests a reroute when pushed off the line. |
+| Husky Gazebo sim | `husky_empty_world.launch` | `/cmd_vel` | `/navsat/fix`, `/imu/data` | Simulated robot base + GPS/IMU plugins (§13). Substitute a real robot base to deploy. |
+
+> Do **not** also run `webcam_navigator_node`, `road_path_navigator_node`, `gps_navigator_node`, or
+> `waypoint_path_node` — each publishes `/cmd_vel` and would fight the fusion navigator.
+
+### 2.3 ROS topics
+
+| Topic | Type | Publisher → Subscriber | Notes |
+|---|---|---|---|
+| `/webcam/image_raw` | `sensor_msgs/Image` | `webcam_publisher` → `vision_avoidance_node` | `rgb8`, 640×480, ~30 Hz. Retarget to the sim/robot camera topic for on-robot vision. |
+| `/vision/avoidance` | `std_msgs/String` (JSON) | `vision_avoidance_node` → `fusion_navigator_node` | Advisory: `{blocked, block_amount, desired_bearing, bin_bearings[], bin_clear[], center_proximity, stamp}`. Bearings are body-frame +left/+yaw (REP-103) — same convention as the GPS heading error, so they arbitrate with no sign flip. |
+| `/navsat/fix` | `sensor_msgs/NavSatFix` | Husky GPS plugin → `fusion_navigator_node`, `web_bridge_node` | Raw GPS, 40 Hz. Fusion projects it to local XY; map_app updates the live pose + trail. |
+| `/imu/data` | `sensor_msgs/Imu` | Husky IMU plugin → `fusion_navigator_node` | Orientation quaternion; only yaw is used. |
+| `/gps/path` | `std_msgs/String` (JSON) | `web_bridge_node` → `fusion_navigator_node` | Ordered `[{latitude, longitude}, …]` densified road path. A new message **fully replaces** the active path. |
+| `/gps/target` | `sensor_msgs/NavSatFix` | `web_bridge_node` → (none in merged mode) | Single-destination publish from `/api/set-target`; legacy hook, not consumed by the fusion navigator. |
+| `/replan_request` | `std_msgs/Empty` | `fusion_navigator_node` → `web_bridge_node` | Debounced reroute trigger; map_app recomputes from the robot's current position to the stored destination. |
+| `/cmd_vel` | `geometry_msgs/Twist` | `fusion_navigator_node` → robot base | `linear.x` (m/s, ≥0), `angular.z` (rad/s, +left). |
+| `/vision_pilot/vision_avoidance/overlay` | `sensor_msgs/Image` | `vision_avoidance_node` → any viewer | Debug overlay; only rendered when subscribed (`get_num_connections() > 0`). |
+
+### 2.4 Map website (`map.html`)
+
+A single static page ([map.html](map.html)) using the **Google Maps JavaScript API** (loaded from
+`maps.googleapis.com` with an embedded API key). It talks to `map_app.py` at `API_BASE =
+http://localhost:5000` over plain `fetch()`; CORS is enabled server-side so the file can be opened
+straight from disk (`firefox map.html`).
+
+| UI element | Behavior | Endpoint called |
+|---|---|---|
+| Map click | Sets a destination marker, requests a road route, draws it as the **red** preview polyline. | `POST /api/set-path` |
+| **Approve** button | Sends the staged path to the robot (the actual "go"). Enabled only after a path is computed. | `POST /api/approve-path` |
+| **Clear** button | Hides destination/path/trail and clears the server-side trail. | `POST /api/clear-trail` |
+| Gray dots + lines | Every routable road-graph node (gray circle) and edge (gray line) — makes disconnected road clusters visible. Loaded once at startup. | `GET /api/road-nodes`, `GET /api/road-edges` |
+| Robot marker | Polled at **5 Hz** (200 ms), recenters the map on the live robot position. | `GET /api/robot-pose` |
+| **Blue** trail polyline | Polled at **1 Hz**, draws the robot's actual traveled GPS track over the red planned path to see divergence at a glance. | `GET /api/robot-trail` |
+
+Layer z-order (drawing priority): road edges (1) < road nodes (2) < red planned path (3) < blue
+actual trail (4).
+
+### 2.5 `map_app.py` backend REST endpoints (Flask, `:5000`)
+
+| Method | Endpoint | Body / params | Returns | Purpose |
+|---|---|---|---|---|
+| `GET` | `/api/robot-pose` | — | `{latitude, longitude}` | Latest robot GPS pose (updated from `/navsat/fix`). |
+| `GET` | `/api/target` | — | target dict or `null` | Currently set single target. |
+| `POST` | `/api/set-target` | `{latitude, longitude}` | echo of target | Sets a target and publishes it on `/gps/target` (legacy single-point path). |
+| `POST` | `/api/set-path` | `{latitude, longitude}` (destination) | waypoint list | **Stages** a road route from the robot's current pose to the destination (Dijkstra + densify). Preview only — does not move the robot. Clears the trail and stores the destination for replans. |
+| `POST` | `/api/approve-path` | — | `{status, waypoints}` | Publishes the staged path on `/gps/path` — the robot starts following it. `400` if nothing staged. |
+| `GET` | `/api/path` | — | waypoint list | The currently staged/active path. |
+| `GET` | `/api/road-nodes` | — | `[{latitude, longitude}, …]` | All road-graph nodes (precomputed once at startup). |
+| `GET` | `/api/road-edges` | — | `[{from, to}, …]` | All road-graph edges (precomputed once at startup). |
+| `GET` | `/api/robot-trail` | — | `[{latitude, longitude}, …]` | Robot's actual traveled GPS trail (recorded server-side at ~1 Hz). |
+| `POST` | `/api/clear-trail` | — | `{status}` | Empties the recorded trail. |
+
+Internally, `POST /api/set-path` and the `/replan_request` handler share one `_build_path(dest)`
+helper so a previewed path and a mid-drive reroute are shaped identically.
+
+### 2.6 Formulas used across the pipeline
+
+The GPS/IMU control formulas (equirectangular projection, quaternion→yaw, heading-offset
+self-calibration, the heading PID, cross-track error, replan trigger) are given in full in **§14.3**.
+The path-building math on the `map_app.py` / `road_network.py` side, which produces the `/gps/path`
+the fusion navigator consumes:
+
+**Great-circle (haversine) leg length** — edge weights in the road graph and densification spacing
+([`road_network.haversine_m`](road_network.py)):
+```
+a = sin²(Δφ/2) + cos(φ₁)·cos(φ₂)·sin²(Δλ/2)
+d = 2·R·asin(√a)          R = 6,371,000 m,  φ = latitude, λ = longitude (radians)
+```
+
+**Shortest road path** — Dijkstra over the highway graph, edge weights = haversine metres
+([`road_network.route_latlon`](road_network.py)): snap start/end to the nearest graph node
+(brute-force min-distance), then `networkx.shortest_path(weight='weight')`. Returns `None` if the
+endpoints are in disconnected components (map_app then falls back to a straight `[start, dest]` leg).
+
+**Path densification** — subdivide each leg so consecutive points are ≤ `_PATH_SPACING_M` (2.0 m)
+apart, linear in lat/lon ([`road_network.densify_latlon`](road_network.py)):
+```
+n_seg = max(1, ceil(leg_m / spacing_m))
+for k in 1..n_seg:
+    t = k / n_seg
+    point_k = (lat₁ + (lat₂−lat₁)·t,  lon₁ + (lon₂−lon₁)·t)
+```
+This fine reference line is what makes the fusion navigator's cross-track error (§14.3) meaningful —
+raw Dijkstra road nodes are ~15 m apart.
+
+**Vision advisory scoring** — the `blocked` / `desired_bearing` / per-bin `bin_clear` fields the
+advisory carries come from `compute_command()`; its full 9-bin scoring, braking, and speed formulas
+are documented in **§11**. The fusion navigator's `_arbitrate()` FOLLOW/AVOID/BLOCKED selection over
+those fields is summarized in §14 (and the arbitration parameters listed there).
 
 ---
 
@@ -442,7 +587,7 @@ Returns `(linear, angular, info)` — `info` carries all per-bin arrays plus `bl
 ```
 seg_pred (H,W) class ids                 depth_pred (H,W) relative depth
           │                                         │
-          └────────────────────┬────────────────────┘
+          └─────────────────────┬───────────────────┘
                                 ▼
                     ROI crop — keep bottom (1 − roi_top_frac) of the frame
                                 │
