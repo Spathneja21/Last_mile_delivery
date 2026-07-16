@@ -83,7 +83,7 @@ def compute_command(seg_pred, depth_pred, p):
 
     info = {
         'fg_frac': fg_frac, 'road_frac': road_frac, 'fg_proximity': fg_proximity,
-        'bin_bearing': bin_bearing, 'best': best, 'cols': cols,
+        'bin_bearing': bin_bearing, 'score': score, 'best': best, 'cols': cols,
         'desired_bearing': desired_bearing,
         'center_fg': center_fg, 'center_proximity': center_proximity,
         'area_blocked': area_blocked, 'depth_blocked': depth_blocked, 'blocked': blocked,

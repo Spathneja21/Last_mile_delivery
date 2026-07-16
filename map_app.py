@@ -4,7 +4,7 @@ import time
 
 import rospy
 from sensor_msgs.msg import NavSatFix # For GPS data
-from std_msgs.msg import String
+from std_msgs.msg import String, Empty
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import threading
@@ -40,6 +40,16 @@ road_edges = [
 
 # Target the robot should navigate to. None until the user sets one from the map.
 current_target = None
+
+# Destination (lat, lon) of the currently staged/active path — remembered so
+# the fusion navigator's /replan_request can reroute from the robot's CURRENT
+# position to the SAME destination after an obstacle detour, with no new click.
+current_destination = None
+
+# Spacing (metres) the road route is densified to before it's sent — gives the
+# fusion navigator a fine reference line so cross-track deviation off an
+# obstacle detour is measurable (Dijkstra road nodes alone are ~15 m apart).
+_PATH_SPACING_M = 2.0
 
 # Ordered list of waypoints for the current path (multi-point navigation via
 # waypoint_path_node.py / move_base). Empty until the user commits a path.
@@ -91,22 +101,14 @@ def set_target():
         target_pub.publish(msg)
     return jsonify(current_target)
 
-@app.route('/api/set-path', methods=['POST'])
-def set_path():
-    """Compute the road route from the robot's current position to the
-    clicked destination and stage it for preview — does NOT send anything to
-    the robot yet. The frontend draws this in red; the robot only starts
-    moving once /api/approve-path is called (the "Approve" button)."""
-    global current_path, _last_trail_time
-    robot_trail.clear()   # fresh destination -> fresh trail to compare against this attempt
-    _last_trail_time = 0.0   # don't let the old throttle timer delay the first new point
-    data = request.get_json(force=True)
-    dest = (float(data['latitude']), float(data['longitude']))
+def _build_path(dest):
+    """Route from the robot's CURRENT position to dest=(lat, lon) along the
+    road graph (Dijkstra shortest path), densified to _PATH_SPACING_M. Falls
+    back to a straight line if no road path connects them (disconnected
+    components / click outside the mapped area). Returns a waypoint-dict list.
 
-    # Route from the robot's CURRENT position to the one clicked point along
-    # the road graph (Dijkstra shortest path). Falls back to a straight line
-    # if no road path connects them (e.g. disconnected components / click
-    # outside the mapped area).
+    Shared by /api/set-path (preview) and the /replan_request handler (reroute
+    mid-drive) so both produce identically-shaped, equally-dense paths."""
     start = (current_pose['latitude'], current_pose['longitude'])
     leg = road_network.route_latlon(road_graph, start, dest)
     if leg is None:
@@ -115,12 +117,30 @@ def set_path():
         # route_latlon() starts at the nearest ROAD NODE, not the robot's
         # actual position (they're rarely the same point — this extract has
         # the robot's spawn ~27m from the nearest road). Prepend the real
-        # start so the drawn/sent path visibly includes that initial
-        # off-road leg instead of silently skipping it.
+        # start so the drawn/sent path visibly includes that initial off-road
+        # leg instead of silently skipping it.
         leg = [start] + leg
 
-    waypoints = [{"latitude": lat, "longitude": lon} for lat, lon in leg]
-    current_path = waypoints
+    dense = road_network.densify_latlon(leg, spacing_m=_PATH_SPACING_M)
+    return [{"latitude": lat, "longitude": lon} for lat, lon in dense]
+
+
+@app.route('/api/set-path', methods=['POST'])
+def set_path():
+    """Compute the road route from the robot's current position to the
+    clicked destination and stage it for preview — does NOT send anything to
+    the robot yet. The frontend draws this in red; the robot only starts
+    moving once /api/approve-path is called (the "Approve" button)."""
+    global current_path, current_destination, _last_trail_time
+    robot_trail.clear()   # fresh destination -> fresh trail to compare against this attempt
+    _last_trail_time = 0.0   # don't let the old throttle timer delay the first new point
+    data = request.get_json(force=True)
+    dest = (float(data['latitude']), float(data['longitude']))
+
+    # Remember the destination so an obstacle-triggered /replan_request can
+    # reroute to it from the robot's new position without another click.
+    current_destination = dest
+    current_path = _build_path(dest)
     return jsonify(current_path)
 
 @app.route('/api/approve-path', methods=['POST'])
@@ -156,12 +176,29 @@ def clear_trail():
     _last_trail_time = 0.0
     return jsonify({"status": "cleared"})
 
+def replan_callback(_msg):
+    """The fusion navigator asks for a reroute when an obstacle detour has
+    pushed the robot off the planned line. Recompute from the robot's CURRENT
+    position to the stored destination and publish it straight to /gps/path —
+    this is an automatic reroute mid-drive, so it does NOT wait for the Approve
+    button (the robot is already moving toward this destination)."""
+    global current_path
+    if current_destination is None:
+        rospy.logwarn('replan requested but no destination stored — ignoring.')
+        return
+    current_path = _build_path(current_destination)
+    if path_pub is not None:
+        path_pub.publish(String(data=json.dumps(current_path)))
+    rospy.loginfo('Replanned from current position: %d waypoint(s).', len(current_path))
+
+
 def run_ros():
     global target_pub, path_pub
     # disable_signals: rospy's default SIGINT handler can only be installed from
     # the main thread, and this runs on a background thread so Flask can own main.
     rospy.init_node('web_bridge_node', anonymous=False, disable_signals=True)
     rospy.Subscriber('/navsat/fix', NavSatFix, gps_callback)
+    rospy.Subscriber('/replan_request', Empty, replan_callback)
     target_pub = rospy.Publisher('/gps/target', NavSatFix, queue_size=10)
     path_pub = rospy.Publisher('/gps/path', String, queue_size=10)
     rospy.spin()

@@ -104,6 +104,33 @@ def route_latlon(graph, start_latlon, end_latlon):
     return [(graph.nodes[n]['lat'], graph.nodes[n]['lon']) for n in node_path]
 
 
+def densify_latlon(path_latlon, spacing_m=1.5):
+    """Subdivide an ordered list of (lat, lon) points so consecutive points are
+    at most ~spacing_m apart, linearly interpolating along each leg.
+
+    Dijkstra road nodes in this extract can be ~15 m apart; the fusion
+    navigator needs a fine reference line so cross-track deviation (how far the
+    robot has been pushed off the planned path by an obstacle detour) is
+    meaningful. Interpolation is linear in lat/lon — fine at these robot-scale
+    (tens of metres) leg lengths, same flat-earth assumption the navigators'
+    latlon_to_local_xy() already makes.
+
+    Endpoints of every leg are always preserved; only intermediate points are
+    added, so a densified path still passes exactly through every original
+    node/waypoint."""
+    if len(path_latlon) < 2 or spacing_m <= 0:
+        return list(path_latlon)
+
+    dense = [tuple(path_latlon[0])]
+    for (lat1, lon1), (lat2, lon2) in zip(path_latlon, path_latlon[1:]):
+        leg_m = haversine_m(lat1, lon1, lat2, lon2)
+        n_seg = max(1, int(math.ceil(leg_m / spacing_m)))
+        for k in range(1, n_seg + 1):        # skip k=0 (already the last point added)
+            t = k / n_seg
+            dense.append((lat1 + (lat2 - lat1) * t, lon1 + (lon2 - lon1) * t))
+    return dense
+
+
 def snap_path(graph, waypoints):
     """Take an ordered list of raw (lat, lon) clicks and return a dense,
     road-following list by routing between each consecutive pair. Falls
