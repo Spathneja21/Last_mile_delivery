@@ -17,7 +17,7 @@ import numpy as np
 
 
 def load_log(csv_path):
-    bins, linear, angular, command = [], [], [], []
+    bins, linear, angular, command = [], [], [], []  # chosen steering bin, linear/angular velocity, and issued command per frame
     with open(csv_path, newline='') as f:
         for row in csv.DictReader(f):
             bins.append(int(row['bin_number']))
@@ -29,13 +29,13 @@ def load_log(csv_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--csv', default='logs/pipeline_log.csv')
-    ap.add_argument('--output', default='logs/pipeline_log_plots.png')
+    ap.add_argument('--csv', default='logs/pipeline_log.csv')  # input log path
+    ap.add_argument('--output', default='logs/pipeline_log_plots.png')  # path to write the combined figure
     args = ap.parse_args()
 
     bins, linear, angular, command = load_log(args.csv)
     frame = np.arange(len(bins))
-    brake = command == 'BRAKE'
+    brake = command == 'BRAKE'  # boolean mask of frames where a BRAKE command was issued (vs CLEAR)
 
     fig = plt.figure(figsize=(12, 17))
     axes = [fig.add_subplot(5, 1, i + 1) for i in range(3)]
@@ -66,7 +66,7 @@ def main():
 
     # 4. Command distribution + bin histogram side by side.
     ax_cmd = fig.add_subplot(5, 2, 7)
-    counts = [int(np.sum(command == 'CLEAR')), int(np.sum(brake))]
+    counts = [int(np.sum(command == 'CLEAR')), int(np.sum(brake))]  # frame counts per command type
     ax_cmd.bar(['CLEAR', 'BRAKE'], counts, color=['tab:green', 'tab:red'])
     for i, c in enumerate(counts):
         ax_cmd.text(i, c, str(c), ha='center', va='bottom')
@@ -78,9 +78,9 @@ def main():
     ax_bin.set_xlabel('bin number')
 
     # 5. Bin vs linear velocity, and bin vs angular velocity (scatter + per-bin mean).
-    bin_vals = np.unique(bins)
-    rng = np.random.default_rng(0)
-    jitter = (rng.random(len(bins)) - 0.5) * 0.3
+    bin_vals = np.unique(bins)  # distinct bin numbers, used as x-axis for per-bin means
+    rng = np.random.default_rng(0)  # fixed seed for reproducible scatter jitter
+    jitter = (rng.random(len(bins)) - 0.5) * 0.3  # small random x-offset so overlapping scatter points are visible
 
     ax_lin = fig.add_subplot(5, 2, 9)
     ax_lin.scatter(bins + jitter, linear, s=8, alpha=0.25, color='tab:blue')

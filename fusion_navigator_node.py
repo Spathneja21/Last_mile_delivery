@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Main /cmd_vel producer for the delivery robot: follows the road path from
+# map_app.py using GPS+IMU heading PID, blends in vision-based obstacle
+# avoidance, and triggers an automatic replan when pushed off the route.
 """
 Fusion navigator (ROS1 / husky_catkin_ws) — road-path following + vision
 obstacle avoidance. The single owner of /cmd_vel in the merged pipeline
@@ -42,7 +45,7 @@ from std_msgs.msg import String, Empty
 from sensor_msgs.msg import NavSatFix, Imu
 from geometry_msgs.msg import Twist
 
-EARTH_RADIUS_M = 6371000.0
+EARTH_RADIUS_M = 6371000.0  # mean Earth radius, used for the local flat-earth lat/lon projection
 
 
 def normalize_angle(a: float) -> float:
@@ -110,11 +113,14 @@ def heading_pid(heading_error, p, integral, prev_error, dt):
 
 class FusionNavigatorNode:
     def __init__(self):
+        # Values below come from config/fusion_navigator.yaml, which
+        # run_fusion_navigator.sh loads onto the param server before this
+        # node starts — edit that file to tune behavior instead of these defaults.
         gp = rospy.get_param
-        self.anchor_lat = gp('~anchor_lat', 31.781306)
+        self.anchor_lat = gp('~anchor_lat', 31.781306)  # local-xy projection origin; matches map_app.py's anchor
         self.anchor_lon = gp('~anchor_lon', 76.997611)
-        self.intermediate_tolerance = gp('~intermediate_tolerance', 1.0)
-        self.final_tolerance = gp('~final_tolerance', 0.5)
+        self.intermediate_tolerance = gp('~intermediate_tolerance', 1.0)  # m, radius to count a mid-path waypoint reached
+        self.final_tolerance = gp('~final_tolerance', 0.5)  # m, tighter radius for the last waypoint
         self.p = {
             'max_linear_speed': gp('~max_linear_speed', 0.6),
             'max_angular_speed': gp('~max_angular_speed', 1.0),
@@ -122,9 +128,9 @@ class FusionNavigatorNode:
             'kp_angular': gp('~kp_angular', 1.5),
             'ki_angular': gp('~ki_angular', 0.02),
             'kd_angular': gp('~kd_angular', 0.3),
-            'rotate_in_place_angle': gp('~rotate_in_place_angle', 0.6),
+            'rotate_in_place_angle': gp('~rotate_in_place_angle', 0.6),  # rad heading error above which the robot stops and turns instead of driving forward
         }
-        self.pose_timeout = gp('~pose_timeout', 1.0)
+        self.pose_timeout = gp('~pose_timeout', 1.0)  # s, GPS/IMU older than this is treated as stale -> robot halts
 
         # --- Vision arbitration params.
         self.vision_timeout = gp('~vision_timeout', 0.5)   # advisory older than this -> treat as clear
@@ -144,11 +150,11 @@ class FusionNavigatorNode:
         self.dt = 1.0 / float(control_rate)
 
         # --- Heading offset auto-calibration (see road_path_navigator_node.py).
-        self.course_min_dist = gp('~course_min_dist', 0.4)
-        self.offset_filter_alpha = gp('~offset_filter_alpha', 0.3)
-        self.calib_min_speed = gp('~calib_min_speed', 0.15)
-        self.calib_max_turn = gp('~calib_max_turn', 0.25)
-        self.bootstrap_speed = gp('~bootstrap_speed', 0.3)
+        self.course_min_dist = gp('~course_min_dist', 0.4)  # m the robot must move before a new GPS-course sample is taken
+        self.offset_filter_alpha = gp('~offset_filter_alpha', 0.3)  # low-pass weight for updating heading_offset from new samples
+        self.calib_min_speed = gp('~calib_min_speed', 0.15)  # m/s below which GPS course is too noisy to trust for calibration
+        self.calib_max_turn = gp('~calib_max_turn', 0.25)  # rad/s above which the robot isn't driving straight enough to calibrate
+        self.bootstrap_speed = gp('~bootstrap_speed', 0.3)  # m/s used to drive straight while heading_offset is still uncalibrated
 
         self.gps_position = None
         self.gps_latlon = None
@@ -156,11 +162,11 @@ class FusionNavigatorNode:
         self.last_gps_time = None
         self.last_imu_time = None
 
-        self.heading_offset = 0.0
-        self.offset_initialized = False
-        self.course_baseline = None
-        self.last_cmd_v = 0.0
-        self.last_cmd_w = 0.0
+        self.heading_offset = 0.0     # measured IMU-yaw -> GPS/ENU heading correction
+        self.offset_initialized = False  # True once heading_offset has a real (non-zero-guess) value
+        self.course_baseline = None   # (x, y) GPS position the current calibration sample is measured from
+        self.last_cmd_v = 0.0         # last published linear speed, used to gate calibration on "driving straight"
+        self.last_cmd_w = 0.0         # last published angular speed, same purpose
 
         self.waypoints = []             # (x, y, lat, lon) still to visit, in order
         self.covered = []               # (lat, lon) already reached
@@ -303,15 +309,15 @@ class FusionNavigatorNode:
         clear_idx = [i for i, s in enumerate(clears) if s >= self.clear_score_min]
 
         if clear_idx:
-            best_i = min(clear_idx,
+            best_i = min(clear_idx,  # index of the drivable camera bin closest to the road heading
                          key=lambda i: abs(normalize_angle(bearings[i] - road_err)))
             heading_error = bearings[best_i]
             linear = (0.0 if abs(heading_error) > self.p['rotate_in_place_angle']
-                      else self.p['max_linear_speed'] * (1.0 - block_amount))
+                      else self.p['max_linear_speed'] * (1.0 - block_amount))  # slow down proportionally to how blocked the view is
             return heading_error, linear, 'AVOID'
 
         # Nothing drivable -> rotate in place toward the least-bad direction.
-        heading_error = float(vision.get('desired_bearing', 0.0))
+        heading_error = float(vision.get('desired_bearing', 0.0)) 
         return heading_error, 0.0, 'BLOCKED'
 
     def _maybe_replan(self, x, y):

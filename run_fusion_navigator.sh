@@ -28,6 +28,9 @@ export PYTHONPATH="\
 $PYTHONPATH"
 export ROS_MASTER_URI="${ROS_MASTER_URI:-http://localhost:11311}"
 
+# ---------- tunable params (gains, tolerances, topics, calibration) ----------
+rosparam load "$WS_DIR/config/fusion_navigator.yaml" /fusion_navigator_node
+
 echo "=================================================="
 echo " fusion_navigator_node  (road PID + vision avoid)"
 echo "   sole /cmd_vel owner — do not run other navigators"

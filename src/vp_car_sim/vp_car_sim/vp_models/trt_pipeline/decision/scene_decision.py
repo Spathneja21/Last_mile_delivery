@@ -12,8 +12,8 @@ import math
 import numpy as np
 import cv2
 
-CLS_FOREGROUND = 1
-CLS_ROAD = 2
+CLS_FOREGROUND = 1  # SceneSeg class id for obstacle/foreground pixels
+CLS_ROAD = 2  # SceneSeg class id for drivable road pixels
 
 
 def compute_command(seg_pred, depth_pred, p):
@@ -26,7 +26,7 @@ def compute_command(seg_pred, depth_pred, p):
     Returns (linear_x, angular_z, info) where info has per-bin debug fields.
     """
     h, w = seg_pred.shape
-    top = int(p['roi_top_frac'] * h)
+    top = int(p['roi_top_frac'] * h)  # row where the region-of-interest (ignore sky/hood) starts
     roi_seg = seg_pred[top:, :]
     roi_depth = depth_pred[top:, :]
 
@@ -34,22 +34,24 @@ def compute_command(seg_pred, depth_pred, p):
     d_min, d_max = float(roi_depth.min()), float(roi_depth.max())
     norm_depth = (roi_depth - d_min) / max(d_max - d_min, 1e-6)
 
-    n = p['num_bins']
-    cols = np.array_split(np.arange(w), n)
-    half_fov = math.radians(p['camera_hfov_deg']) / 2.0
+    n = p['num_bins']  # number of vertical column bins the frame width is split into
+    cols = np.array_split(np.arange(w), n)  # column-index groups, one per bin
+    half_fov = math.radians(p['camera_hfov_deg']) / 2.0  # half of camera horizontal field of view, radians
 
-    bin_bearing = np.zeros(n)
-    fg_frac = np.zeros(n)
-    road_frac = np.zeros(n)
+    bin_bearing = np.zeros(n)      # steering bearing (rad) toward the center of each bin
+    fg_frac = np.zeros(n)          # fraction of foreground/obstacle pixels in each bin
+    road_frac = np.zeros(n)        # fraction of road pixels in each bin
     fg_proximity = np.zeros(n)     # nearest obstacle pixel in this bin, 0 if none
     for i, c in enumerate(cols):
-        seg = roi_seg[:, c[0]:c[-1] + 1]
-        depth = norm_depth[:, c[0]:c[-1] + 1]
-        fg_mask = (seg == CLS_FOREGROUND)
+        seg = roi_seg[:, c[0]:c[-1] + 1]  # class-id slice of this bin's columns
+        depth = norm_depth[:, c[0]:c[-1] + 1]  # normalized-depth slice of this bin's columns
+        fg_mask = (seg == CLS_FOREGROUND)  # boolean mask of obstacle pixels within the bin
         fg_frac[i] = float(np.mean(fg_mask))
         road_frac[i] = float(np.mean(seg == CLS_ROAD))
         fg_proximity[i] = float(depth[fg_mask].max()) if np.any(fg_mask) else 0.0
-        u = (((c[0] + c[-1]) / 2.0) - w / 2.0) / (w / 2.0)      # [-1 (left) .. +1 (right)]
+        u = (((c[0] + c[-1]) / 2.0) - w / 2.0) / (w / 2.0)      # bin center column, normalized to image half-width and
+                                                                # recentered on the image midline: -1 = left edge,
+                                                                # 0 = straight ahead (image center), +1 = right edge
         bin_bearing[i] = -u * half_fov                          # +bearing = left = +yaw
 
     # Depth-weighted obstacle penalty: a near obstacle (fg_proximity -> 1) penalizes a
@@ -57,24 +59,24 @@ def compute_command(seg_pred, depth_pred, p):
     score = (p['road_weight'] * road_frac
              - p['obstacle_weight'] * fg_frac * (0.5 + 0.5 * fg_proximity))
 
-    best = int(np.argmax(score))
+    best = int(np.argmax(score))  # index of the highest-scoring (most drivable) bin
     desired_bearing = float(bin_bearing[best])
 
     # Central third of the bins = path straight ahead.
-    lo, hi = n // 3, n - n // 3
-    center_fg = float(np.max(fg_frac[lo:hi])) if hi > lo else float(fg_frac[best])
-    center_proximity = float(np.max(fg_proximity[lo:hi])) if hi > lo else float(fg_proximity[best])
+    lo, hi = n // 3, n - n // 3  # the middle 3 bins
+    center_fg = float(np.max(fg_frac[lo:hi])) if hi > lo else float(fg_frac[best])  # worst obstacle coverage straight ahead
+    center_proximity = float(np.max(fg_proximity[lo:hi])) if hi > lo else float(fg_proximity[best])  # closest obstacle straight ahead
 
-    angular = p['kp_steer'] * desired_bearing
-    angular = max(-p['max_angular_speed'], min(p['max_angular_speed'], angular))
+    angular = p['kp_steer'] * desired_bearing  # proportional steering gain applied to bearing error
+    angular = max(-p['max_angular_speed'], min(p['max_angular_speed'], angular)) #putting minimax filter to keep angular speed in range [-1 rad/s to 1 rad/s]
 
-    area_blocked = center_fg >= p['blocked_stop_fraction']
-    depth_blocked = center_proximity >= p['brake_depth_threshold']
+    area_blocked = center_fg >= p['blocked_stop_fraction']  # too much obstacle area ahead -> stop
+    depth_blocked = center_proximity >= p['brake_depth_threshold']  # obstacle too close ahead -> stop
     blocked = area_blocked or depth_blocked
 
     block_amount = max(center_fg / max(1e-3, p['blocked_stop_fraction']),
                         center_proximity / max(1e-3, p['brake_depth_threshold']))
-    block_amount = min(1.0, block_amount)
+    block_amount = min(1.0, block_amount)  # 0 = clear, 1 = fully blocked; scales down linear speed
     linear = p['max_linear_speed'] * (1.0 - block_amount)
     if blocked or abs(desired_bearing) > p['rotate_in_place_angle']:
         linear = 0.0

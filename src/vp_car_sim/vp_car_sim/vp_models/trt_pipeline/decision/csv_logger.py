@@ -10,10 +10,10 @@ class CommandLogger:
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
 
-        is_new = not os.path.exists(csv_path)
+        is_new = not os.path.exists(csv_path)  # write header only the first time the file is created
         self.file = open(csv_path, 'a', newline='')
         self.writer = csv.writer(self.file)
-        self._flush_counter = 0
+        self._flush_counter = 0  # rows written since last flush to disk
         if is_new:
             self.writer.writerow(['bin_number', 'linear_velocity', 'angular_velocity', 'command'])
             self.file.flush()
@@ -22,7 +22,7 @@ class CommandLogger:
         command = 'BRAKE' if blocked else 'CLEAR'
         self.writer.writerow([bin_number, linear_velocity, angular_velocity, command])
         self._flush_counter += 1
-        if self._flush_counter >= 10:
+        if self._flush_counter >= 10:  # batch flush every 10 rows to reduce disk I/O
             self.file.flush()
             self._flush_counter = 0
 

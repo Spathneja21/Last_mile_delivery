@@ -1,0 +1,42 @@
+# Tunable params for fusion_navigator_node (loaded onto the ROS param server
+# under its private namespace before the node starts). Edit values here
+# instead of the hardcoded defaults in fusion_navigator_node.py.
+
+anchor_lat: 31.781306   # local-xy projection origin latitude; matches map_app.py's anchor
+anchor_lon: 76.997611   # local-xy projection origin longitude; matches map_app.py's anchor
+intermediate_tolerance: 1.0   # m, radius to count a mid-path waypoint reached
+final_tolerance: 0.5          # m, tighter radius for the last waypoint
+
+max_linear_speed: 0.6
+max_angular_speed: 1.0
+kp_linear: 0.5
+kp_angular: 1.5
+ki_angular: 0.02
+kd_angular: 0.3
+rotate_in_place_angle: 0.6   # rad heading error above which the robot stops and turns instead of driving forward
+
+pose_timeout: 1.0   # s, GPS/IMU older than this is treated as stale -> robot halts
+
+# --- Vision arbitration params ---
+vision_timeout: 0.5     # s, advisory older than this -> treat as clear
+clear_score_min: 0.0    # per-bin clear score to count a bin as drivable
+
+# --- Cross-track / replan params ---
+replan_dist: 3.0             # m off the line before a replan is warranted
+replan_min_interval: 5.0     # s debounce between replans
+
+# --- Topics ---
+gps_topic: /navsat/fix
+imu_topic: /imu/data
+path_topic: /gps/path
+advisory_topic: /vision/avoidance
+replan_topic: /replan_request
+cmd_vel_topic: /cmd_vel
+control_rate: 10.0   # Hz, control loop / cmd_vel publish rate
+
+# --- Heading offset auto-calibration ---
+course_min_dist: 0.4        # m the robot must move before a new GPS-course sample is taken
+offset_filter_alpha: 0.3    # low-pass weight for updating heading_offset from new samples
+calib_min_speed: 0.15       # m/s below which GPS course is too noisy to trust for calibration
+calib_max_turn: 0.25        # rad/s above which the robot isn't driving straight enough to calibrate
+bootstrap_speed: 0.3        # m/s used to drive straight while heading_offset is still uncalibrated

@@ -1,4 +1,8 @@
 #! /usr/bin/env python3
+# Decoder "neck" for the scene segmentation network: progressively upsamples
+# the attended context feature map back up through three stages, merging in
+# shallower backbone skip connections at each stage (U-Net style), before
+# handing off to the segmentation head.
 import torch.nn as nn
 
 class SceneNeck(nn.Module):
@@ -7,19 +11,19 @@ class SceneNeck(nn.Module):
         # Standard
         self.GeLU = nn.GELU()
 
-        # Decoder - Neck Layers 
+        # Decoder - Neck Layers
         self.upsample_layer_0 = nn.ConvTranspose2d(1280, 1280, 2, 2)
-        self.skip_link_layer_0 = nn.Conv2d(80, 1280, 1)
+        self.skip_link_layer_0 = nn.Conv2d(80, 1280, 1)  # projects backbone features[3] (80 channels) to match context channel count
         self.decode_layer_0 = nn.Conv2d(1280, 768, 3, 1, 1)
         self.decode_layer_1 = nn.Conv2d(768, 768, 3, 1, 1)
 
         self.upsample_layer_1 = nn.ConvTranspose2d(768, 768, 2, 2)
-        self.skip_link_layer_1 = nn.Conv2d(40, 768, 1)
+        self.skip_link_layer_1 = nn.Conv2d(40, 768, 1)  # projects backbone features[2] (40 channels) to match stage channel count
         self.decode_layer_2 = nn.Conv2d(768, 512, 3, 1, 1)
         self.decode_layer_3 = nn.Conv2d(512, 512, 3, 1, 1)
 
         self.upsample_layer_2 = nn.ConvTranspose2d(512, 512, 2, 2)
-        self.skip_link_layer_2 = nn.Conv2d(24, 512, 1)
+        self.skip_link_layer_2 = nn.Conv2d(24, 512, 1)  # projects backbone features[1] (24 channels) to match stage channel count
         self.decode_layer_4 = nn.Conv2d(512, 512, 3, 1, 1)
         self.decode_layer_5 = nn.Conv2d(512, 256, 3, 1, 1)
 

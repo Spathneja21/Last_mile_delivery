@@ -1,9 +1,13 @@
 #! /usr/bin/env python3
+
+# TensorRT-accelerated wrapper around the Scene3D relative-depth model.
+# Preprocesses a PIL image, runs an async TRT engine execution on a dedicated
+# CUDA stream, and returns the raw (H, W, C) depth prediction as a numpy array.
 import torch
 import tensorrt as trt
 from torchvision import transforms
 
-TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+TRT_LOGGER = trt.Logger(trt.Logger.WARNING)  # TensorRT engine logger, only reports warnings/errors
 
 
 class Scene3DNetworkInferTRT():
@@ -24,13 +28,13 @@ class Scene3DNetworkInferTRT():
         print(f'Using {self.device} for inference (TensorRT engine)')
 
         with open(engine_path, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime:
-            self.engine = runtime.deserialize_cuda_engine(f.read())
-        self.context = self.engine.create_execution_context()
+            self.engine = runtime.deserialize_cuda_engine(f.read())  # loaded TensorRT engine from the serialized .trt/.engine file
+        self.context = self.engine.create_execution_context()  # per-inference execution context bound to the engine
 
-        self.input_name = self.engine.get_tensor_name(0)
-        self.output_name = self.engine.get_tensor_name(1)
+        self.input_name = self.engine.get_tensor_name(0)  # name of the engine's single input binding
+        self.output_name = self.engine.get_tensor_name(1)  # name of the engine's single output binding
         out_shape = tuple(self.engine.get_tensor_shape(self.output_name))
-        self.output = torch.empty(out_shape, dtype=torch.float32, device=self.device)
+        self.output = torch.empty(out_shape, dtype=torch.float32, device=self.device)  # preallocated GPU buffer the engine writes into
 
         self.stream = torch.cuda.Stream(device=self.device)
         self._live_tensor = None  # keeps input tensor alive until stream sync

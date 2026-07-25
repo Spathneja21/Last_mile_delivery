@@ -1,3 +1,5 @@
+# ROS2 launch file that starts the scene_seg_node (SceneSeg segmentation-inference
+# node) standalone, wired to a camera image topic and publishing a class overlay.
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration

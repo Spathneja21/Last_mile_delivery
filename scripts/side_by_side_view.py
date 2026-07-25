@@ -8,21 +8,24 @@ Panels appear left-to-right as: raw | SceneSeg/Scene3D overlay | YOLO overlay.
 The YOLO panel is only included once at least one YOLO overlay frame has
 arrived, so this still works unchanged if yolo_detector_node isn't running.
 """
+# ROS node that runs continuously (rospy.spin()) with no CLI args; topics are
+# configured via ROS params (~raw_topic, ~overlay_topic, ~yolo_overlay_topic,
+# ~out_topic), typically set from a launch file.
 import numpy as np
 from PIL import Image as PILImage
 
 import rospy
 from sensor_msgs.msg import Image
 
-latest_raw = None
-latest_seg_overlay = None
-latest_yolo_overlay = None
+latest_raw = None  # most recent raw webcam frame (RGB8 ndarray), updated by raw_cb
+latest_seg_overlay = None  # most recent SceneSeg/Scene3D overlay frame, updated by seg_overlay_cb
+latest_yolo_overlay = None  # most recent YOLO overlay frame, updated by yolo_overlay_cb
 
 
 def imgmsg_to_rgb8(msg):
     arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
     if msg.encoding == 'bgr8':
-        arr = arr[:, :, ::-1].copy()
+        arr = arr[:, :, ::-1].copy()  # convert BGR channel order to RGB
     return arr
 
 
@@ -80,11 +83,11 @@ def yolo_overlay_cb(msg, pub):
 
 def main():
     rospy.init_node('side_by_side_view', anonymous=True)
-    raw_topic = rospy.get_param('~raw_topic', '/webcam/image_raw')
-    overlay_topic = rospy.get_param('~overlay_topic', '/vision_pilot/webcam_navigator/overlay')
+    raw_topic = rospy.get_param('~raw_topic', '/webcam/image_raw')  # raw camera feed topic
+    overlay_topic = rospy.get_param('~overlay_topic', '/vision_pilot/webcam_navigator/overlay')  # SceneSeg/Scene3D overlay topic
     yolo_overlay_topic = rospy.get_param('~yolo_overlay_topic',
-                                        '/vision_pilot/yolo_detector/overlay')
-    out_topic = rospy.get_param('~out_topic', '/vision_pilot/side_by_side')
+                                        '/vision_pilot/yolo_detector/overlay')  # optional YOLO detection overlay topic
+    out_topic = rospy.get_param('~out_topic', '/vision_pilot/side_by_side')  # combined image output topic
 
     pub = rospy.Publisher(out_topic, Image, queue_size=1)
     rospy.Subscriber(raw_topic, Image, raw_cb, callback_args=pub, queue_size=1, buff_size=2**24)

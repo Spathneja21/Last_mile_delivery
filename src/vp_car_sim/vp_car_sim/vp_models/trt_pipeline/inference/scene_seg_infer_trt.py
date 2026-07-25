@@ -1,9 +1,12 @@
 #! /usr/bin/env python3
+# TensorRT-accelerated wrapper around the SceneSeg semantic segmentation model.
+# Preprocesses a PIL image, runs an async TRT engine execution on a dedicated
+# CUDA stream, and returns the per-pixel argmax class-id map as a numpy array.
 import torch
 import tensorrt as trt
 from torchvision import transforms
 
-TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+TRT_LOGGER = trt.Logger(trt.Logger.WARNING)  # TensorRT engine logger, only reports warnings/errors
 
 
 class SceneSegNetworkInferTRT():
@@ -24,13 +27,13 @@ class SceneSegNetworkInferTRT():
         print(f'Using {self.device} for inference (TensorRT engine)')
 
         with open(engine_path, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime:
-            self.engine = runtime.deserialize_cuda_engine(f.read())
-        self.context = self.engine.create_execution_context()
+            self.engine = runtime.deserialize_cuda_engine(f.read())  # loaded TensorRT engine from the serialized .trt/.engine file
+        self.context = self.engine.create_execution_context()  # per-inference execution context bound to the engine
 
-        self.input_name = self.engine.get_tensor_name(0)
-        self.output_name = self.engine.get_tensor_name(1)
+        self.input_name = self.engine.get_tensor_name(0)  # name of the engine's single input binding
+        self.output_name = self.engine.get_tensor_name(1)  # name of the engine's single output binding
         out_shape = tuple(self.engine.get_tensor_shape(self.output_name))
-        self.output = torch.empty(out_shape, dtype=torch.float32, device=self.device)
+        self.output = torch.empty(out_shape, dtype=torch.float32, device=self.device)  # preallocated GPU buffer the engine writes into (per-class logits)
 
         self.stream = torch.cuda.Stream(device=self.device)
         self._live_tensor = None  # keeps input tensor alive until stream sync
@@ -46,7 +49,9 @@ class SceneSegNetworkInferTRT():
             self.context.set_input_shape(self.input_name, tuple(image_tensor.shape))
             self.context.set_tensor_address(self.input_name, image_tensor.data_ptr())
             self.context.set_tensor_address(self.output_name, self.output.data_ptr())
-            self.context.execute_async_v3(self.stream.cuda_stream)
+            self.context.execute_async_v3(self.stream.cuda_stream)  # enqueues the engine's compiled inference operations onto the given 
+                                                                    # raw CUDA stream handle and returns immediately without waiting for completion.
+            
             self._live_tensor = image_tensor  # prevent GC before stream finishes
 
     def fetch_result(self):

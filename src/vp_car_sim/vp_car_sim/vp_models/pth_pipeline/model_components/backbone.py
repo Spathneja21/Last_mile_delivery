@@ -1,4 +1,7 @@
 #! /usr/bin/env python3
+# ImageNet-pretrained EfficientNet-B0 encoder used as the shared image
+# backbone for the scene segmentation network. Exposes intermediate feature
+# maps at several downsampling stages for the neck's skip connections.
 import torch.nn as nn
 from torchvision import models
 
@@ -19,4 +22,4 @@ class Backbone(nn.Module):
         l6 = self.encoder[6](l5)
         l7 = self.encoder[7](l6)
         l8 = self.encoder[8](l7)
-        return [l0, l2, l3, l4, l8]      
+        return [l0, l2, l3, l4, l8]  # selected stage outputs (shallow -> deep) consumed by the neck/context modules

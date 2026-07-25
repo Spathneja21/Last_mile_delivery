@@ -5,6 +5,10 @@ plot_timings.py  --  Visualise per-frame pipeline timing from timing_log.csv.
 Usage:
   python3 scripts/plot_timings.py --csv timing_log.csv --output timing_plots.png
 """
+# Reads a timing_log.csv (one row per processed frame, columns = pipeline
+# stage durations in ms) and renders a multi-panel PNG: stacked per-stage
+# timing, callback-vs-end-to-end latency, box plots, and a summary stats
+# table. Run standalone via `python3 scripts/plot_timings.py --csv ... --output ...`.
 import argparse
 import csv
 import os
@@ -14,13 +18,13 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 
 
-STAGES = ['pre_ms', 'seg_ms', 'depth_ms', 'post_ms', 'pub_ms']
-STAGE_LABELS = ['Preprocess', 'SceneSeg', 'Scene3D depth', 'Post/CSV', 'Publish']
-STAGE_COLORS = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f']
+STAGES = ['pre_ms', 'seg_ms', 'depth_ms', 'post_ms', 'pub_ms']  # csv column names for each pipeline stage's duration (ms)
+STAGE_LABELS = ['Preprocess', 'SceneSeg', 'Scene3D depth', 'Post/CSV', 'Publish']  # human-readable names matching STAGES order
+STAGE_COLORS = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f']  # plot colors matching STAGES order
 
 
 def load(csv_path):
-    rows = {k: [] for k in ['frame'] + STAGES + ['total_ms', 'e2e_ms']}
+    rows = {k: [] for k in ['frame'] + STAGES + ['total_ms', 'e2e_ms']}  # total_ms = full callback wall time, e2e_ms = capture-to-publish latency
     with open(csv_path, newline='') as f:
         for row in csv.DictReader(f):
             for k in rows:
@@ -30,13 +34,13 @@ def load(csv_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--csv',    default='timing_log.csv')
-    ap.add_argument('--output', default='timing_plots.png')
+    ap.add_argument('--csv',    default='timing_log.csv')  # path to the input timing log
+    ap.add_argument('--output', default='timing_plots.png')  # path to write the combined figure
     args = ap.parse_args()
 
     d = load(args.csv)
     frames = d['frame']
-    n = len(frames)
+    n = len(frames)  # total frame count, used in titles/labels
 
     fig = plt.figure(figsize=(14, 16))
     fig.suptitle(f'Pipeline timing  ({n} frames)', fontsize=13, fontweight='bold', y=0.99)
@@ -44,7 +48,7 @@ def main():
 
     # ── 1. Stacked area: per-stage contribution over time ──────────────────
     ax1 = fig.add_subplot(gs[0, :])
-    bottom = np.zeros(n)
+    bottom = np.zeros(n)  # running stack height for the stacked area fill
     for key, label, color in zip(STAGES, STAGE_LABELS, STAGE_COLORS):
         vals = d[key]
         ax1.fill_between(frames, bottom, bottom + vals, label=label,
@@ -90,9 +94,9 @@ def main():
     ax4 = fig.add_subplot(gs[2, 1])
     ax4.axis('off')
 
-    all_keys = STAGES + ['total_ms', 'e2e_ms']
-    all_labels = STAGE_LABELS + ['Total', 'End-to-end']
-    col_labels = ['Stage', 'Mean', 'p50', 'p95', 'Max']
+    all_keys = STAGES + ['total_ms', 'e2e_ms']  # data columns to summarize in the stats table
+    all_labels = STAGE_LABELS + ['Total', 'End-to-end']  # matching row labels for the table
+    col_labels = ['Stage', 'Mean', 'p50', 'p95', 'Max']  # stats table header
     rows_data = []
     for key, label in zip(all_keys, all_labels):
         v = d[key]

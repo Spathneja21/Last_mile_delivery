@@ -1,3 +1,6 @@
+# setuptools build/install config for the vp_car_sim ROS2 package: registers
+# the package with ament, installs launch/urdf/world/rviz share files, and
+# declares the console-script entry points for the SceneSeg/Scene3D nodes.
 import os
 from glob import glob
 from setuptools import setup, find_packages
@@ -12,10 +15,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),
-        (os.path.join('share', package_name, 'worlds'), glob('worlds/*')),
-        (os.path.join('share', package_name, 'rviz'), glob('rviz/*')),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),  # install all launch files
+        (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),  # install robot URDF/xacro description
+        (os.path.join('share', package_name, 'worlds'), glob('worlds/*')),  # install Gazebo world files
+        (os.path.join('share', package_name, 'rviz'), glob('rviz/*')),  # install RViz visualization configs
     ],
     install_requires=['setuptools'],
     zip_safe=True,

@@ -1,3 +1,5 @@
+# ROS2 launch file for a live-webcam demo: starts a v4l2 USB camera node feeding
+# SceneSeg (segmentation), and optionally Scene3D (depth) if a checkpoint is given.
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition

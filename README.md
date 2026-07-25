@@ -97,9 +97,10 @@ perception-only bring-up, but it must **not** run alongside the fusion navigator
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗
-║  HUMAN — BROWSER  (map.html, Google Maps JavaScript API)                                          ║
-║    click map → POST /api/set-path (preview)      Approve button → POST /api/approve-path (go)     ║
-║    Clear → POST /api/clear-trail                                                                  ║
+║          BROWSER  (map.html, Google Maps JavaScript API)                                          ║
+║         click map → POST /api/set-path (preview)                                                  ║
+║    Approve button → POST /api/approve-path (go)                                                   ║
+║             Clear → POST /api/clear-trail                                                         ║
 ║    poll: GET /api/robot-pose (5 Hz) · /api/robot-trail (1 Hz) · /api/road-nodes|edges (once)      ║
 ╚════════════════════════════════════════╤══════════════════════════════════════════════════════════╝
                                          │ HTTP POST  :5000                     ▲ 

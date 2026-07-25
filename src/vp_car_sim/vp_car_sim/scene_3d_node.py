@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# ROS2 node that runs the Scene3D depth model on the front camera feed.
+# Subscribes to an image topic (default /vp_car/front_camera/image_raw) and
+# publishes a colorized depth overlay blended over the original frame
+# (default /vision_pilot/scene_3d/overlay).
 import cv2
 import numpy as np
 from PIL import Image as PILImage
@@ -15,14 +19,14 @@ from vp_car_sim.vp_models.pth_pipeline.inference.scene_3d_infer import Scene3DNe
 MODEL_WIDTH = 640
 MODEL_HEIGHT = 320
 
-ALPHA = 0.5
+ALPHA = 0.5  # overlay blend weight (0=only camera image, 1=only depth overlay)
 
 
 class Scene3DNode(Node):
     def __init__(self):
         super().__init__('scene_3d_node')
 
-        self.declare_parameter('checkpoint_path', '')
+        self.declare_parameter('checkpoint_path', '')  # path to Scene3D .pth weights
         self.declare_parameter('input_topic', '/vp_car/front_camera/image_raw')
         self.declare_parameter('output_topic', '/vision_pilot/scene_3d/overlay')
 

@@ -1,4 +1,7 @@
 #! /usr/bin/env python3
+# Final decoder stage of the 3D/depth network: takes the depth neck output
+# plus a shallow backbone skip connection and upsamples/decodes it down to a
+# single-channel per-pixel depth prediction map.
 import torch.nn as nn
 
 class Scene3DHead(nn.Module):
@@ -9,7 +12,7 @@ class Scene3DHead(nn.Module):
 
         # Segmentation Head - Output Layers
         self.upsample_layer_3 = nn.ConvTranspose2d(256, 256, 2, 2)
-        self.skip_link_layer_3 = nn.Conv2d(32, 256, 1)
+        self.skip_link_layer_3 = nn.Conv2d(32, 256, 1)  # projects shallow backbone features (features[0]) to match neck channel count
         self.decode_layer_6 = nn.Conv2d(256, 256, 3, 1, 1)
         self.decode_layer_7 = nn.Conv2d(256, 128, 3, 1, 1)
         self.upsample_layer_4 = nn.ConvTranspose2d(128, 128, 2, 2)
@@ -17,7 +20,7 @@ class Scene3DHead(nn.Module):
         # Prediction 1
         self.decode_layer_8 = nn.Conv2d(128, 128, 3, 1, 1)
         self.decode_layer_9 = nn.Conv2d(128, 128, 3, 1, 1)
-        self.decode_layer_10 = nn.Conv2d(128, 1, 3, 1, 1)
+        self.decode_layer_10 = nn.Conv2d(128, 1, 3, 1, 1)  # final output layer: 1 output channel = predicted depth
 
 
     def forward(self, neck, features):

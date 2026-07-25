@@ -24,9 +24,9 @@ def generate_launch_description():
         DeclareLaunchArgument('cmd_vel_topic', default_value='/cmd_vel'),
         DeclareLaunchArgument('goal_x', default_value='40.0'),
         DeclareLaunchArgument('goal_y', default_value='0.0'),
-        DeclareLaunchArgument('goal_tolerance', default_value='1.5'),
-        DeclareLaunchArgument('max_linear_speed', default_value='0.6'),
-        DeclareLaunchArgument('max_angular_speed', default_value='1.0'),
+        DeclareLaunchArgument('goal_tolerance', default_value='1.5'),  # distance (m) from goal counted as "arrived"
+        DeclareLaunchArgument('max_linear_speed', default_value='0.6'),  # cap on forward speed (m/s)
+        DeclareLaunchArgument('max_angular_speed', default_value='1.0'),  # cap on turn rate (rad/s)
     ]
 
     navigator = Node(

@@ -1,3 +1,5 @@
+# ROS2 launch file that starts the scene_3d_node (Scene3D depth-inference node)
+# standalone, wired to a camera image topic and publishing a depth overlay.
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration

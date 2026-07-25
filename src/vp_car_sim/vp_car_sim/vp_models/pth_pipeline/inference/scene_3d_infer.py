@@ -1,4 +1,7 @@
 #! /usr/bin/env python3
+# Inference wrapper for the trained Scene3DNetwork: loads model weights from
+# a checkpoint, preprocesses an input camera image, and runs a forward pass
+# to produce a dense depth/3D-scene prediction as a numpy array.
 import torch
 from torchvision import transforms
 
@@ -13,7 +16,7 @@ class Scene3DNetworkInfer():
         self.image_loader = transforms.Compose(
             [
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet channel mean/std used to normalize input images
             ]
         )
 
@@ -22,7 +25,7 @@ class Scene3DNetworkInfer():
         print(f'Using {self.device} for inference')
 
         # Instantiate model, load to device and set to evaluation mode
-        sceneSegNetwork = SceneSegNetwork()
+        sceneSegNetwork = SceneSegNetwork()  # only used to supply the backbone structure; its weights are overwritten by the checkpoint below
         self.model = Scene3DNetwork(sceneSegNetwork)
 
         if(len(checkpoint_path) > 0):
@@ -37,7 +40,7 @@ class Scene3DNetworkInfer():
     def inference(self, image):
 
         width, height = image.size
-        if(width != 640 or height != 320):
+        if(width != 640 or height != 320):  # fixed input resolution the network was trained/architected for
             raise ValueError('Incorrect input size - input image must have height of 320px and width of 640px')
 
         image_tensor = self.image_loader(image)

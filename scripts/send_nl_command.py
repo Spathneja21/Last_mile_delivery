@@ -17,7 +17,7 @@ from std_msgs.msg import String
 
 def main():
     rospy.init_node('send_nl_command', anonymous=True)
-    command_topic = rospy.get_param('~command_topic', '/vision_pilot/nl_command')
+    command_topic = rospy.get_param('~command_topic', '/vision_pilot/nl_command')  # topic nl_command_node listens on
     pub = rospy.Publisher(command_topic, String, queue_size=10)
 
     rospy.sleep(0.5)  # give the publisher a moment to register with the master

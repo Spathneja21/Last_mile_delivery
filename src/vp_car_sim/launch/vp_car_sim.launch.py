@@ -1,3 +1,6 @@
+# ROS2 launch file for the full vp_car Gazebo simulation: spawns the car in an
+# Ignition Gazebo world, bridges its camera/cmd_vel/odom topics to ROS2, and
+# optionally starts RViz2 for visualization.
 import os
 
 from ament_index_python.packages import get_package_share_directory

@@ -1,4 +1,8 @@
 #! /usr/bin/env python3
+# Global-context module for the scene segmentation network: squeezes the
+# deepest backbone feature map into a vector via an MLP "bottleneck", reshapes
+# it back into a spatial attention map, and applies it to the input features
+# (squeeze-and-excitation style attention) before handing off to the neck.
 import torch
 import torch.nn as nn
 
@@ -11,16 +15,16 @@ class SceneContext(nn.Module):
         self.dropout = nn.Dropout(p=0.25)
 
         # Context - MLP Layers
-        self.context_layer_0 = nn.Linear(1280, 800)
+        self.context_layer_0 = nn.Linear(1280, 800)  # 1280 = EfficientNet-B0 deepest feature channel count
         self.context_layer_1 = nn.Linear(800, 800)
-        self.context_layer_2 = nn.Linear(800, 200)
+        self.context_layer_2 = nn.Linear(800, 200)  # 200 = flattened size of the 10x20 attention map produced below
 
         # Context - Extraction Layers
         self.context_layer_3 = nn.Conv2d(1, 128, 3, 1, 1)
         self.context_layer_4 = nn.Conv2d(128, 256, 3, 1, 1)
         self.context_layer_5 = nn.Conv2d(256, 512, 3, 1, 1)
         self.context_layer_6 = nn.Conv2d(512, 1280, 3, 1, 1)
-     
+
 
     def forward(self, features):
         # Pooling and averaging channel layers to get a single vector
@@ -36,12 +40,12 @@ class SceneContext(nn.Module):
         c2 = self.context_layer_2(c1)
         c2 = self.dropout(c2)
         c2 = self.sigmoid(c2)
-        
+
         # Reshape
-        c3 = c2.reshape([10, 20])
+        c3 = c2.reshape([10, 20])  # 10x20 = spatial resolution of the deepest backbone feature map at 320x640 input
         c3 = c3.unsqueeze(0)
         c3 = c3.unsqueeze(0)
-        
+
         # Context
         c4 = self.context_layer_3(c3)
         c4 = self.GeLU(c4)

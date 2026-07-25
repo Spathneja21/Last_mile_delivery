@@ -30,8 +30,8 @@ from vp_car_sim.vp_models.pth_pipeline.inference.scene_seg_infer import SceneSeg
 # SceneSeg input size + class ids
 MODEL_WIDTH = 640
 MODEL_HEIGHT = 320
-CLS_FOREGROUND = 1
-CLS_ROAD = 2
+CLS_FOREGROUND = 1  # SceneSeg class id: obstacle
+CLS_ROAD = 2  # SceneSeg class id: drivable road (class 0 = background, implicit)
 
 
 def normalize_angle(a: float) -> float:
@@ -59,7 +59,7 @@ def compute_command(prediction, heading_error, dist_to_goal, p):
     """
     h, w = prediction.shape
     roi = prediction[int(p['roi_top_frac'] * h):, :]            # lower band = near road
-    n = p['num_bins']
+    n = p['num_bins']  # number of vertical scan bins across the frame
     cols = np.array_split(np.arange(w), n)
 
     half_fov = math.radians(p['camera_hfov_deg']) / 2.0
@@ -122,27 +122,27 @@ class SceneSegNavigator(Node):
         super().__init__('scene_seg_navigator')
 
         # --- parameters ---
-        self.declare_parameter('checkpoint_path', '')
+        self.declare_parameter('checkpoint_path', '')  # path to SceneSeg .pth weights
         self.declare_parameter('image_topic', '/husky/front_camera/image_raw')
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         self.declare_parameter('overlay_topic', '/vision_pilot/navigator/overlay')
-        self.declare_parameter('goal_x', 0.0)
-        self.declare_parameter('goal_y', 0.0)
-        self.declare_parameter('goal_tolerance', 1.5)
+        self.declare_parameter('goal_x', 0.0)  # goal position in odom frame
+        self.declare_parameter('goal_y', 0.0)  # goal position in odom frame
+        self.declare_parameter('goal_tolerance', 1.5)  # distance (m) within which the goal counts as reached
         self.declare_parameter('max_linear_speed', 0.6)
         self.declare_parameter('max_angular_speed', 1.0)
-        self.declare_parameter('kp_steer', 1.5)
-        self.declare_parameter('num_bins', 9)
-        self.declare_parameter('roi_top_frac', 0.4)
-        self.declare_parameter('goal_weight', 1.0)
-        self.declare_parameter('road_weight', 0.6)
-        self.declare_parameter('obstacle_weight', 2.0)
-        self.declare_parameter('blocked_stop_fraction', 0.4)
-        self.declare_parameter('rotate_in_place_angle', 0.6)
-        self.declare_parameter('camera_hfov_deg', 50.0)
-        self.declare_parameter('control_rate', 10.0)
-        self.declare_parameter('image_timeout', 2.0)
+        self.declare_parameter('kp_steer', 1.5)  # proportional steering gain
+        self.declare_parameter('num_bins', 9)  # number of vertical scan bins across the frame
+        self.declare_parameter('roi_top_frac', 0.4)  # fraction of image height cropped off the top before scoring
+        self.declare_parameter('goal_weight', 1.0)  # bin score weight for goal-bearing alignment
+        self.declare_parameter('road_weight', 0.6)  # bin score weight for drivable-road coverage
+        self.declare_parameter('obstacle_weight', 2.0)  # bin score penalty weight for obstacle coverage
+        self.declare_parameter('blocked_stop_fraction', 0.4)  # central obstacle fraction above which the path counts as blocked
+        self.declare_parameter('rotate_in_place_angle', 0.6)  # bearing magnitude (rad) beyond which the robot stops and rotates
+        self.declare_parameter('camera_hfov_deg', 50.0)  # camera horizontal field of view, used to map bins to bearings
+        self.declare_parameter('control_rate', 10.0)  # Hz, rate of the cmd_vel control timer
+        self.declare_parameter('image_timeout', 2.0)  # seconds without a new image before the watchdog stops the robot
 
         gp = self.get_parameter
         checkpoint_path = gp('checkpoint_path').value
@@ -174,7 +174,7 @@ class SceneSegNavigator(Node):
         self.pose = None            # (x, y, yaw)
         self.cmd = (0.0, 0.0)       # latest (v, w)
         self.last_image_time = None
-        self.reached = False
+        self.reached = False        # latched True once goal_tolerance is reached, to stop and stay stopped
 
         self.create_subscription(Image, self.image_topic, self.image_cb, 1)
         self.create_subscription(Odometry, gp('odom_topic').value, self.odom_cb, 10)

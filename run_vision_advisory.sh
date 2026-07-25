@@ -40,6 +40,11 @@ $PYTHONPATH"
 export ROS_MASTER_URI="${ROS_MASTER_URI:-http://localhost:11311}"
 export PYTHONPATH
 
+# ---------- tunable params (steering gain, ROI, weights, thresholds) ----------
+# Loaded onto the param server first; the _name:=value CLI args below still
+# take precedence over these since they're applied when the node starts.
+rosparam load "$WS_DIR/config/vision_avoidance.yaml" /vision_avoidance_node
+
 echo "=================================================="
 echo " vision_avoidance_node  (advisor, ROS 1 / vp_gpu, CUDA)"
 echo "=================================================="

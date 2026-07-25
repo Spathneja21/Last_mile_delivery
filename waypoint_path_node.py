@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Alternative /cmd_vel producer: consumes the same /gps/path waypoint list as
+# fusion_navigator_node.py, but drives each leg via move_base action goals
+# instead of a direct proportional controller (real costmap obstacle avoidance).
 """
 Waypoint path follower (ROS1 / husky_catkin_ws) — real path planning via move_base.
 
@@ -66,9 +69,9 @@ def make_goal(x, y, frame_id):
 class WaypointPathNode:
     def __init__(self):
         gp = rospy.get_param
-        self.anchor_lat = gp('~anchor_lat', 31.781306)
+        self.anchor_lat = gp('~anchor_lat', 31.781306)  # local-xy projection origin; matches map_app.py's anchor
         self.anchor_lon = gp('~anchor_lon', 76.997611)
-        self.frame_id = gp('~frame_id', 'odom')
+        self.frame_id = gp('~frame_id', 'odom')  # move_base goal frame; no static map/AMCL in this setup
         path_topic = gp('~path_topic', '/gps/path')
 
         self._lock = threading.Lock()

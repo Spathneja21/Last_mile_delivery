@@ -55,13 +55,13 @@ class YoloDetectorNode:
     def __init__(self):
         rospy.init_node('yolo_detector_node', anonymous=False)
 
-        weights_path  = rospy.get_param('~weights_path', '')
+        weights_path  = rospy.get_param('~weights_path', '')  # YOLOv8 .pt checkpoint
         image_topic   = rospy.get_param('~image_topic', '/webcam/image_raw')
         overlay_topic = rospy.get_param('~overlay_topic',
                                         '/vision_pilot/yolo_detector/overlay')
         detections_topic = rospy.get_param('~detections_topic',
                                            '/vision_pilot/yolo_detector/detections')
-        self.conf_threshold = rospy.get_param('~conf_threshold', 0.4)
+        self.conf_threshold = rospy.get_param('~conf_threshold', 0.4)  # min detection confidence to keep a box
 
         if not weights_path:
             rospy.logfatal('No weights_path provided (YOLOv8 .pt checkpoint).')
@@ -71,11 +71,11 @@ class YoloDetectorNode:
         rospy.loginfo(f'YOLO model loaded from {weights_path} '
                       f'({len(self.model.names)} classes).')
 
-        self.overlay_pub    = rospy.Publisher(overlay_topic, Image, queue_size=1)
+        self.overlay_pub    = rospy.Publisher(overlay_topic, Image, queue_size=1)  # only latest frame matters
         self.detections_pub = rospy.Publisher(detections_topic, String, queue_size=10)
 
         rospy.Subscriber(image_topic, Image, self.image_cb, queue_size=1,
-                         buff_size=2**24)
+                         buff_size=2**24)  # large buffer so raw image messages aren't dropped/split
         rospy.loginfo(f'Monitoring {image_topic}, publishing overlay on {overlay_topic} '
                       f'and detections on {detections_topic}')
 

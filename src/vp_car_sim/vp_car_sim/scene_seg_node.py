@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# ROS2 node that runs the SceneSeg 3-class segmentation model on the front
+# camera feed. Subscribes to an image topic (default
+# /vp_car/front_camera/image_raw) and publishes a colorized segmentation
+# overlay blended over the original frame (default
+# /vision_pilot/scene_seg/overlay).
 import numpy as np
 from PIL import Image as PILImage
 
@@ -21,14 +26,14 @@ CLASS_COLOURS = {
     1: (220, 40, 40),
     2: (40, 180, 40),
 }
-ALPHA = 0.5
+ALPHA = 0.5  # overlay blend weight (0=only camera image, 1=only seg overlay)
 
 
 class SceneSegNode(Node):
     def __init__(self):
         super().__init__('scene_seg_node')
 
-        self.declare_parameter('checkpoint_path', '')
+        self.declare_parameter('checkpoint_path', '')  # path to SceneSeg .pth weights
         self.declare_parameter('input_topic', '/vp_car/front_camera/image_raw')
         self.declare_parameter('output_topic', '/vision_pilot/scene_seg/overlay')
 

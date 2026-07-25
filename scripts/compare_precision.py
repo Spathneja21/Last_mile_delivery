@@ -19,19 +19,19 @@ import tensorrt as trt
 from PIL import Image
 from torchvision import transforms
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-WS = os.path.abspath(os.path.join(HERE, '..'))
-sys.path.insert(0, os.path.join(WS, 'src', 'vp_car_sim'))
+HERE = os.path.dirname(os.path.abspath(__file__))  # this scripts/ directory
+WS = os.path.abspath(os.path.join(HERE, '..'))  # workspace root, one level up
+sys.path.insert(0, os.path.join(WS, 'src', 'vp_car_sim'))  # make vp_car_sim package importable
 
 from vp_car_sim.vp_models.pth_pipeline.inference.scene_seg_infer import SceneSegNetworkInfer
 from vp_car_sim.vp_models.pth_pipeline.inference.scene_3d_infer import Scene3DNetworkInfer
 
-MODEL_W, MODEL_H = 640, 320
-TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+MODEL_W, MODEL_H = 640, 320  # network input resolution expected by SceneSeg/Scene3D
+TRT_LOGGER = trt.Logger(trt.Logger.WARNING)  # shared TensorRT logger for engine loading
 
 IMAGE_LOADER = transforms.Compose([
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # ImageNet normalization stats used by the models
 ])
 
 
@@ -40,10 +40,10 @@ class TRTModel:
         with open(engine_path, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime:
             self.engine = runtime.deserialize_cuda_engine(f.read())
         self.context = self.engine.create_execution_context()
-        self.input_name = self.engine.get_tensor_name(0)
-        self.output_name = self.engine.get_tensor_name(1)
+        self.input_name = self.engine.get_tensor_name(0)  # assumes tensor 0 is the engine input
+        self.output_name = self.engine.get_tensor_name(1)  # assumes tensor 1 is the engine output
         out_shape = tuple(self.engine.get_tensor_shape(self.output_name))
-        self.output = torch.empty(out_shape, dtype=torch.float32, device='cuda')
+        self.output = torch.empty(out_shape, dtype=torch.float32, device='cuda')  # pre-allocated GPU output buffer reused across infer() calls
 
     def infer(self, x_gpu):
         x_gpu = x_gpu.contiguous()
@@ -57,7 +57,7 @@ class TRTModel:
 
 
 def colorize(class_map):
-    colors = {0: (90, 90, 90), 1: (220, 40, 40), 2: (40, 180, 40)}
+    colors = {0: (90, 90, 90), 1: (220, 40, 40), 2: (40, 180, 40)}  # RGB per SceneSeg class: background=gray, foreground/object=red, drivable road=green
     h, w = class_map.shape
     out = np.zeros((h, w, 3), dtype=np.uint8)
     for cid, col in colors.items():
@@ -67,16 +67,16 @@ def colorize(class_map):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--image', default=os.path.join(WS, 'image copy.png'))
-    ap.add_argument('--seg-ckpt', default=os.path.join(WS, 'models', 'SceneSeg.pth'))
-    ap.add_argument('--seg-engine', default=os.path.join(WS, 'models', 'SceneSeg_FP16.engine'))
-    ap.add_argument('--depth-ckpt', default=os.path.join(WS, 'models', 'scene3D.pth'))
-    ap.add_argument('--depth-engine', default=os.path.join(WS, 'models', 'Scene3D_FP16.engine'))
-    ap.add_argument('--outdir', default=HERE)
+    ap.add_argument('--image', default=os.path.join(WS, 'image copy.png'))  # input frame to run through both precisions
+    ap.add_argument('--seg-ckpt', default=os.path.join(WS, 'models', 'SceneSeg.pth'))  # original FP32 SceneSeg checkpoint
+    ap.add_argument('--seg-engine', default=os.path.join(WS, 'models', 'SceneSeg_FP16.engine'))  # FP16 TensorRT SceneSeg engine
+    ap.add_argument('--depth-ckpt', default=os.path.join(WS, 'models', 'scene3D.pth'))  # original FP32 Scene3D checkpoint
+    ap.add_argument('--depth-engine', default=os.path.join(WS, 'models', 'Scene3D_FP16.engine'))  # FP16 TensorRT Scene3D engine
+    ap.add_argument('--outdir', default=HERE)  # where comparison PNGs are written
     args = ap.parse_args()
 
     img = Image.open(args.image).convert('RGB').resize((MODEL_W, MODEL_H))
-    x = IMAGE_LOADER(img).unsqueeze(0).cuda()
+    x = IMAGE_LOADER(img).unsqueeze(0).cuda()  # normalized tensor with batch dim, moved to GPU
 
     print('=== SceneSeg ===')
     seg_pth = SceneSegNetworkInfer(checkpoint_path=args.seg_ckpt)
@@ -85,11 +85,11 @@ def main():
     seg_trt = TRTModel(args.seg_engine)
     with torch.inference_mode():
         seg_logits_fp16 = seg_trt.infer(x)
-    seg_class_map_fp16 = torch.max(seg_logits_fp16.squeeze(0).permute(1, 2, 0), dim=2)[1].cpu().numpy()
+    seg_class_map_fp16 = torch.max(seg_logits_fp16.squeeze(0).permute(1, 2, 0), dim=2)[1].cpu().numpy()  # argmax over class logits -> per-pixel class id
 
     agree = 100.0 * np.mean(seg_class_map_fp32 == seg_class_map_fp16)
     print(f'Pixel agreement (FP32 .pth vs FP16 .engine): {agree:.3f} %')
-    for cid, name in {0: 'background', 1: 'foreground/object', 2: 'drivable road'}.items():
+    for cid, name in {0: 'background', 1: 'foreground/object', 2: 'drivable road'}.items():  # SceneSeg class id -> name
         inter = np.count_nonzero((seg_class_map_fp32 == cid) & (seg_class_map_fp16 == cid))
         union = np.count_nonzero((seg_class_map_fp32 == cid) | (seg_class_map_fp16 == cid))
         iou = 100.0 * inter / union if union else float('nan')
@@ -118,7 +118,7 @@ def main():
     Image.fromarray(seg_side).save(os.path.join(args.outdir, 'compare_sceneseg_fp32_vs_fp16.png'))
 
     def depth_to_img(d):
-        d = (d - d.min()) / max(d.max() - d.min(), 1e-6)
+        d = (d - d.min()) / max(d.max() - d.min(), 1e-6)  # normalize to [0, 1], avoid divide-by-zero on flat depth maps
         return (d * 255).astype(np.uint8)
 
     depth_side = np.concatenate([depth_to_img(depth_fp32), depth_to_img(depth_fp16)], axis=1)

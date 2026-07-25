@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Road-graph routing library used by map_app.py: parses/caches a local OSM
+# extract into a graph and computes shortest, densified road paths between
+# lat/lon points for the delivery robot to follow.
 """
 Lightweight local road-network router built from a saved .osm.pbf extract.
 
@@ -22,7 +25,7 @@ import os
 import osmium
 import networkx as nx
 
-EARTH_RADIUS_M = 6371000.0
+EARTH_RADIUS_M = 6371000.0  # mean Earth radius, used by the haversine distance formula
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -53,7 +56,7 @@ class _RoadGraphHandler(osmium.SimpleHandler):
             if prev is not None:
                 dist = haversine_m(prev[1], prev[2], lat, lon)
                 self.graph.add_edge(prev[0], node_id, weight=dist)
-            prev = (node_id, lat, lon)
+            prev = (node_id, lat, lon)  # (id, lat, lon) of the previous node in this way, for the next edge
 
 
 def build_graph(pbf_path):
@@ -124,7 +127,7 @@ def densify_latlon(path_latlon, spacing_m=1.5):
     dense = [tuple(path_latlon[0])]
     for (lat1, lon1), (lat2, lon2) in zip(path_latlon, path_latlon[1:]):
         leg_m = haversine_m(lat1, lon1, lat2, lon2)
-        n_seg = max(1, int(math.ceil(leg_m / spacing_m)))
+        n_seg = max(1, int(math.ceil(leg_m / spacing_m)))  # number of sub-segments this leg is split into
         for k in range(1, n_seg + 1):        # skip k=0 (already the last point added)
             t = k / n_seg
             dense.append((lat1 + (lat2 - lat1) * t, lon1 + (lon2 - lon1) * t))

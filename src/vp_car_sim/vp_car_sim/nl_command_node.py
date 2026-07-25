@@ -71,12 +71,12 @@ Rules for find_and_stop:
 If the command doesn't clearly map to one of the schemas above (e.g. unrelated small talk), use "unknown"."""
 
 # Hard server-side bounds — enforced regardless of what the model returns.
-SCALE_MIN, SCALE_MAX = 0.2, 1.5
-TURN_DURATION_MAX = 5.0
-DETECTION_CONFIDENCE_THRESHOLD = 0.5
-NO_DETECTIONS_WARNING_DELAY = 5.0
+SCALE_MIN, SCALE_MAX = 0.2, 1.5  # allowed range for set_speed_scale
+TURN_DURATION_MAX = 5.0  # seconds, cap on requested turn duration
+DETECTION_CONFIDENCE_THRESHOLD = 0.5  # min YOLO confidence to accept a find_and_stop match
+NO_DETECTIONS_WARNING_DELAY = 5.0  # seconds to wait before warning that no detections arrived for find_and_stop
 
-RETRYABLE_STATUS = {429, 500, 503}
+RETRYABLE_STATUS = {429, 500, 503}  # HTTP codes worth retrying the Gemini call on
 MAX_RETRIES = 2
 
 
@@ -89,8 +89,8 @@ class NLCommandNode:
             rospy.logfatal('GEMINI_API_KEY environment variable is not set.')
             sys.exit(1)
 
-        command_topic    = rospy.get_param('~command_topic', '/vision_pilot/nl_command')
-        intent_topic     = rospy.get_param('~intent_topic', '/vision_pilot/nl_intent')
+        command_topic    = rospy.get_param('~command_topic', '/vision_pilot/nl_command')  # raw English text in
+        intent_topic     = rospy.get_param('~intent_topic', '/vision_pilot/nl_intent')  # validated JSON intent out
         detections_topic = rospy.get_param('~detections_topic',
                                            '/vision_pilot/yolo_detector/detections')
 
@@ -98,8 +98,8 @@ class NLCommandNode:
         rospy.Subscriber(command_topic, String, self.command_cb, queue_size=10)
 
         # --- "find_and_stop" watch state — resolved against live YOLO detections.
-        self.watch_target = None
-        self._detection_count = 0
+        self.watch_target = None       # COCO class name currently being searched for, or None if idle
+        self._detection_count = 0      # count of detection messages seen since the current watch started
         rospy.Subscriber(detections_topic, String, self.detections_cb, queue_size=10)
 
         rospy.loginfo(f'Listening for commands on {command_topic}, '

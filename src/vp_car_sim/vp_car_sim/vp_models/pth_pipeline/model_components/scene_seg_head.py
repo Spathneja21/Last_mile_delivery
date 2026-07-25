@@ -1,4 +1,7 @@
 #! /usr/bin/env python3
+# Final decoder stage of the scene-segmentation network: takes the neck
+# output plus a shallow backbone skip connection and upsamples/decodes it
+# down to a 3-channel per-pixel class-logit map.
 import torch.nn as nn
 
 class SceneSegHead(nn.Module):
@@ -9,14 +12,14 @@ class SceneSegHead(nn.Module):
 
         # Segmentation Head - Output Layers
         self.upsample_layer_3 = nn.ConvTranspose2d(256, 256, 2, 2)
-        self.skip_link_layer_3 = nn.Conv2d(32, 256, 1)
+        self.skip_link_layer_3 = nn.Conv2d(32, 256, 1)  # projects shallow backbone features (features[0]) to match neck channel count
         self.decode_layer_6 = nn.Conv2d(256, 256, 3, 1, 1)
         self.decode_layer_7 = nn.Conv2d(256, 128, 3, 1, 1)
 
         self.upsample_layer_4 = nn.ConvTranspose2d(128, 128, 2, 2)
         self.decode_layer_8 = nn.Conv2d(128, 128, 3, 1, 1)
         self.decode_layer_9 = nn.Conv2d(128, 64, 3, 1, 1)
-        self.decode_layer_10 = nn.Conv2d(64, 3, 3, 1, 1)
+        self.decode_layer_10 = nn.Conv2d(64, 3, 3, 1, 1)  # final output layer: 3 output channels = segmentation class logits
 
     def forward(self, neck, features):
 

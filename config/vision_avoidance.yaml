@@ -1,0 +1,15 @@
+# Tunable params for vision_avoidance_node (loaded onto the ROS param server
+# under its private namespace before the node starts). Edit values here
+# instead of the hardcoded defaults in vision_avoidance_node.py.
+
+max_linear_speed: 0.6      # m/s cap used for advisory speed hints
+max_angular_speed: 1.0     # rad/s cap used for advisory turn hints
+kp_steer: 1.5               # proportional steering gain
+num_bins: 9                 # number of vertical scan bins across the frame
+roi_top_frac: 0.4           # fraction of image height cropped off the top (sky/horizon) before scoring
+road_weight: 0.6             # bin score weight for drivable-road coverage
+obstacle_weight: 2.0         # bin score penalty weight for foreground obstacle coverage
+blocked_stop_fraction: 0.4   # central obstacle fraction above which the path counts as blocked
+brake_depth_threshold: 0.75  # normalized depth above which a central obstacle triggers braking
+rotate_in_place_angle: 0.6   # bearing magnitude (rad) beyond which the robot stops and rotates instead of driving
+camera_hfov_deg: 50.0        # camera horizontal field of view, used to map bins to bearings

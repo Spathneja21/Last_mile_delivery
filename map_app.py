@@ -1,3 +1,7 @@
+# Flask web backend behind the map UI: serves the robot's live GPS pose and
+# the road-graph overlay, lets the user stage/approve a destination which is
+# routed via road_network.py, and publishes the resulting waypoint path to
+# ROS (/gps/path) for the navigator nodes to drive.
 import json
 import os
 import time
@@ -20,7 +24,7 @@ CORS(app) # Allows your HTML file to talk to this backend
 # Global variable to store current position
 current_pose = {"latitude": 31.781306, "longitude": 76.997611}
 
-_PBF_PATH = os.path.join(os.path.dirname(__file__), 'map',
+_PBF_PATH = os.path.join(os.path.dirname(__file__), 'map',  # local OSM extract covering the operating area
                          'planet_76.993,31.78_76.999,31.783.osm.pbf')
 road_graph = road_network.load_graph(_PBF_PATH)
 

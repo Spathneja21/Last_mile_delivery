@@ -1,4 +1,8 @@
 #! /usr/bin/env python3
+# Global-context module for the 3D/depth network: squeezes the deepest
+# (frozen) backbone feature map into a vector via an MLP "bottleneck",
+# reshapes it back into a spatial attention map, and applies it to the input
+# features (squeeze-and-excitation style attention) before the depth neck.
 import torch
 import torch.nn as nn
 
@@ -11,9 +15,9 @@ class DepthContext(nn.Module):
         self.dropout = nn.Dropout(p=0.25)
 
         # Context - MLP Layers
-        self.context_layer_0 = nn.Linear(1280, 800)
+        self.context_layer_0 = nn.Linear(1280, 800)  # 1280 = EfficientNet-B0 deepest feature channel count
         self.context_layer_1 = nn.Linear(800, 800)
-        self.context_layer_2 = nn.Linear(800, 200)
+        self.context_layer_2 = nn.Linear(800, 200)  # 200 = flattened size of the 10x20 attention map produced below
 
         # Context - Extraction Layers
         self.context_layer_3 = nn.Conv2d(1, 128, 3, 1, 1)
@@ -38,7 +42,7 @@ class DepthContext(nn.Module):
         c2 = self.sigmoid(c2)
 
         # Reshape
-        c3 = c2.reshape([10, 20])
+        c3 = c2.reshape([10, 20])  # 10x20 = spatial resolution of the deepest backbone feature map at 320x640 input
         c3 = c3.unsqueeze(0)
         c3 = c3.unsqueeze(0)
 
