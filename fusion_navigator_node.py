@@ -5,15 +5,13 @@
 """
 Fusion navigator (ROS1 / husky_catkin_ws) — road-path following + vision
 obstacle avoidance. The single owner of /cmd_vel in the merged pipeline
-(see MERGED_NAVIGATION_PLAN.md).
 
-Forked from road_path_navigator_node.py — keeps its GPS(/navsat/fix)+IMU
-(/imu/data) heading PID and its self-calibrating IMU-yaw->ENU heading offset
-(course-over-ground while driving straight) verbatim; those are the hard-won,
-drift-free parts. What's added:
+GPS(/navsat/fix)+IMU(/imu/data) heading PID and its self-calibrating IMU-yaw->ENU 
+heading offset (course-over-ground while driving straight) verbatim; those are 
+the hard-won, drift-free parts. What's added:
 
   1. Vision arbitration. Subscribes /vision/avoidance (published by
-     vision_avoidance_node.py). When the path straight ahead is CLEAR it steers
+     vision_avoidance_node.py). When the path straight ahead is CLEAR it steers    
      toward the next densified road viewpoint (normal line-following). When
      vision reports the way BLOCKED it overrides steering toward the clearest
      camera bin nearest the road direction — i.e. it deviates around the
@@ -26,11 +24,6 @@ drift-free parts. What's added:
      the robot's current GPS to the stored destination and republishes a fresh
      /gps/path, which replaces the active path here. Debounced so one detour =
      one replan.
-
-Do not run this alongside road_path_navigator_node.py / gps_navigator_node.py /
-waypoint_path_node.py / webcam_navigator_node.py — all publish /cmd_vel and
-would fight. Run the vision ADVISOR (vision_avoidance_node.py, which does not
-touch /cmd_vel) plus this node.
 
 Angle conventions: both the GPS-derived heading error toward a viewpoint and
 the vision bin bearings are body-frame "turn this much from current heading"
@@ -50,11 +43,13 @@ EARTH_RADIUS_M = 6371000.0  # mean Earth radius, used for the local flat-earth l
 
 def normalize_angle(a: float) -> float:
     """Wrap angle to [-pi, pi]."""
+
     return math.atan2(math.sin(a), math.cos(a))
 
 
 def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
     """Z-axis (yaw) from a quaternion."""
+
     siny_cosp = 2.0 * (w * z + x * y)
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
     return math.atan2(siny_cosp, cosy_cosp)
@@ -63,6 +58,7 @@ def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
 def latlon_to_local_xy(lat_deg, lon_deg, anchor_lat_deg, anchor_lon_deg):
     """Equirectangular projection around the anchor — same math as
     road_path_navigator_node.py / gps_navigator_node.py."""
+
     lat0 = math.radians(anchor_lat_deg)
     x_east = EARTH_RADIUS_M * math.radians(lon_deg - anchor_lon_deg) * math.cos(lat0)
     y_north = EARTH_RADIUS_M * math.radians(lat_deg - anchor_lat_deg)
@@ -72,13 +68,14 @@ def latlon_to_local_xy(lat_deg, lon_deg, anchor_lat_deg, anchor_lon_deg):
 def point_segment_distance(px, py, ax, ay, bx, by):
     """Perpendicular distance from point (px,py) to the segment (ax,ay)-(bx,by),
     clamped at the endpoints. Used for cross-track error off the planned line."""
-    dx, dy = bx - ax, by - ay
-    seg2 = dx * dx + dy * dy
+
+    dx, dy = bx - ax, by - ay  # segment direction vector, a -> b
+    seg2 = dx * dx + dy * dy  # squared segment length, avoids a sqrt for the degenerate check below
     if seg2 <= 1e-12:
         return math.hypot(px - ax, py - ay)
-    t = ((px - ax) * dx + (py - ay) * dy) / seg2
-    t = max(0.0, min(1.0, t))
-    cx, cy = ax + t * dx, ay + t * dy
+    t = ((px - ax) * dx + (py - ay) * dy) / seg2  # normalized projection of p onto the segment (0=a, 1=b)
+    t = max(0.0, min(1.0, t))  # clamp so the closest point stays on the segment, not its infinite line
+    cx, cy = ax + t * dx, ay + t * dy  # the closest point on the segment to p
     return math.hypot(px - cx, py - cy)
 
 
@@ -92,6 +89,7 @@ def heading_pid(heading_error, p, integral, prev_error, dt):
     # Error crossed zero -> accumulated integral is from the other side of the
     # target and would keep steering after alignment (a converging approach
     # turns into a sustained circle). Reset on sign change.
+    
     if prev_error != 0.0 and (heading_error > 0) != (prev_error > 0):
         integral = 0.0
 
@@ -113,6 +111,7 @@ def heading_pid(heading_error, p, integral, prev_error, dt):
 
 class FusionNavigatorNode:
     def __init__(self):
+        """Load params, init state, and wire up subscribers/publishers/timer."""
         # Values below come from config/fusion_navigator.yaml, which
         # run_fusion_navigator.sh loads onto the param server before this
         # node starts — edit that file to tune behavior instead of these defaults.
@@ -195,6 +194,7 @@ class FusionNavigatorNode:
     # ------------------------------------------------------------------ inputs
 
     def path_cb(self, msg: String):
+        """New /gps/path received — replace the active route and reset PID state."""
         try:
             waypoints = json.loads(msg.data)
         except (json.JSONDecodeError, TypeError):
@@ -218,6 +218,7 @@ class FusionNavigatorNode:
         self._log_next_target()
 
     def vision_cb(self, msg: String):
+        """Cache the latest vision-avoidance advisory and its receive time."""
         try:
             self.vision = json.loads(msg.data)
         except (json.JSONDecodeError, TypeError):
@@ -226,6 +227,7 @@ class FusionNavigatorNode:
         self.last_vision_time = rospy.Time.now()
 
     def gps_cb(self, msg: NavSatFix):
+        """Project the new GPS fix to local xy and feed heading calibration."""
         self.last_gps_time = rospy.Time.now()
         x, y = latlon_to_local_xy(msg.latitude, msg.longitude,
                                   self.anchor_lat, self.anchor_lon)
@@ -234,6 +236,7 @@ class FusionNavigatorNode:
         self._update_heading_offset(x, y)
 
     def imu_cb(self, msg: Imu):
+        """Cache the latest IMU yaw (uncorrected, in the IMU's own frame)."""
         self.last_imu_time = rospy.Time.now()
         q = msg.orientation
         self.imu_yaw = yaw_from_quaternion(q.x, q.y, q.z, q.w)
@@ -246,8 +249,8 @@ class FusionNavigatorNode:
         if self.course_baseline is None:
             self.course_baseline = (x, y)
             return
-        bx, by = self.course_baseline
-        dx, dy = x - bx, y - by
+        bx, by = self.course_baseline  # local xy the current calibration sample is measured from
+        dx, dy = x - bx, y - by  # displacement since the baseline was set
         if math.hypot(dx, dy) < self.course_min_dist:
             return
         self.course_baseline = (x, y)
@@ -257,7 +260,7 @@ class FusionNavigatorNode:
                 or abs(self.last_cmd_w) > self.calib_max_turn):
             return
 
-        gps_course = math.atan2(dy, dx)
+        gps_course = math.atan2(dy, dx)  # direction of travel per GPS, ENU heading (0 = east, +ccw)
         measured_offset = normalize_angle(gps_course - self.imu_yaw)
         if not self.offset_initialized:
             self.heading_offset = measured_offset
@@ -270,15 +273,18 @@ class FusionNavigatorNode:
                 self.heading_offset + self.offset_filter_alpha * delta)
 
     def corrected_yaw(self):
+        """IMU yaw converted into the GPS/ENU heading frame via heading_offset."""
         return normalize_angle(self.imu_yaw + self.heading_offset)
 
     # ---------------------------------------------------------------- helpers
 
     def _reset_pid(self):
+        """Clear PID integral/error state, e.g. when a new path arrives."""
         self.integral_heading = 0.0
         self.prev_heading_error = 0.0
 
     def _log_next_target(self):
+        """Log the next waypoint to reach, or that the path is complete."""
         if not self.waypoints:
             rospy.loginfo('[FUSION] Path complete — %d/%d point(s) covered.',
                           len(self.covered), self.total_waypoints)
@@ -288,6 +294,7 @@ class FusionNavigatorNode:
                       len(self.covered) + 1, self.total_waypoints, lat, lon)
 
     def _vision_fresh(self):
+        """True if a vision advisory exists and hasn't gone stale (vision_timeout)."""
         return (self.vision is not None and self.last_vision_time is not None
                 and (rospy.Time.now() - self.last_vision_time).to_sec() <= self.vision_timeout)
 
@@ -329,9 +336,9 @@ class FusionNavigatorNode:
         # a reroute-through-the-obstacle would just get abandoned next tick.
         if self._vision_fresh() and self.vision.get('blocked', False):
             return
-        gx, gy, _, _ = self.waypoints[0]
-        sx, sy = self.segment_start
-        cross_track = point_segment_distance(x, y, sx, sy, gx, gy)
+        gx, gy, _, _ = self.waypoints[0]  # local xy of the next (goal) waypoint
+        sx, sy = self.segment_start  # local xy where the current leg started
+        cross_track = point_segment_distance(x, y, sx, sy, gx, gy)  # perpendicular distance off the planned segment
         if cross_track < self.replan_dist:
             return
         now = rospy.Time.now()
@@ -345,6 +352,7 @@ class FusionNavigatorNode:
     # ------------------------------------------------------------- control loop
 
     def control_cb(self, _event):
+        """Timer-driven control loop: pick heading/speed and publish /cmd_vel."""
         v, w = 0.0, 0.0
         now = rospy.Time.now()
         gps_stale = (self.last_gps_time is None
@@ -364,7 +372,7 @@ class FusionNavigatorNode:
         elif (self.gps_position is not None and self.imu_yaw is not None
                 and not gps_stale and not imu_stale and self.waypoints):
             x, y = self.gps_position
-            yaw = self.corrected_yaw()
+            yaw = self.corrected_yaw() # maintains the correct yaw.
 
             # Pop any waypoints already within tolerance this tick.
             while self.waypoints:
@@ -382,8 +390,8 @@ class FusionNavigatorNode:
                 self._log_next_target()
 
             if self.waypoints:
-                gx, gy, glat, glon = self.waypoints[0]
-                dist = math.hypot(gx - x, gy - y)
+                gx, gy, glat, glon = self.waypoints[0]  # local xy + lat/lon of the next waypoint
+                dist = math.hypot(gx - x, gy - y)  # straight-line distance from the robot to it
                 road_err = normalize_angle(math.atan2(gy - y, gx - x) - yaw)
 
                 heading_error, v, mode = self._arbitrate(road_err, dist)
